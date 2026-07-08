@@ -191,6 +191,94 @@ async def test_protocol_auto_command_generates_actionable_summary(monkeypatch):
         assert session["last_auto_protocol_session_id"] == "auto-1"
 
 
+async def test_protocol_list_renders_action_buttons(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def list_protocols(self, **kwargs):
+                assert kwargs["lifecycle_state"] == "published"
+                return [
+                    _protocol_item(
+                        protocol_id="protocol-1",
+                        slug="software-engineering",
+                        display_name="Software Engineering",
+                        description="Plan, build, and review a software artifact.",
+                    )
+                ]
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        msg = await send_command(
+            th.cmd_protocol,
+            chat,
+            user,
+            "/protocol list",
+            args=["list"],
+        )
+
+        reply = last_reply(msg)
+        assert "<b>Protocols</b>" in reply
+        assert "Tap Start" in reply
+        assert "Software Engineering" in reply
+        assert "Plan, build, and review" in reply
+        callbacks = get_callback_data_values(msg.replies[-1])
+        assert "protocol:protocol_start:protocol-1" in callbacks
+
+
+async def test_protocol_list_start_callback_returns_launch_template(monkeypatch):
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir)
+        prov = FakeProvider("codex")
+        setup_globals(cfg, prov)
+
+        class _Client:
+            async def list_protocols(self, **kwargs):
+                assert kwargs["lifecycle_state"] == "published"
+                return [
+                    _protocol_item(
+                        protocol_id="protocol-1",
+                        slug="software-engineering",
+                        display_name="Software Engineering",
+                        description="Plan, build, and review a software artifact.",
+                    )
+                ]
+
+        monkeypatch.setattr(
+            telegram_protocols,
+            "registry_client_for_runtime",
+            lambda runtime: (_Client(), "agent-1", "http://registry.local"),
+        )
+
+        import app.runtime.telegram_ingress as th
+
+        chat = FakeChat(1001)
+        user = FakeUser(42)
+        query, msg = await send_callback(
+            th.handle_protocol_callback,
+            chat,
+            user,
+            "protocol:protocol_start:protocol-1",
+        )
+
+        assert query.answered
+        reply = last_reply(msg)
+        assert "<b>Start protocol</b>" in reply
+        assert "Software Engineering" in reply
+        assert "/protocol start software-engineering" in reply
+        assert "--context" in reply
+
+
 async def test_protocol_auto_modify_latest_revises_existing_session(monkeypatch):
     with fresh_data_dir() as data_dir:
         cfg = make_config(data_dir)
@@ -328,7 +416,7 @@ async def test_protocol_auto_stages_callback_renders_generated_stage_view(monkey
         reply = last_reply(msg)
         assert "Auto Protocol" in reply
         assert "Stages" in reply
-        assert "Map requirement" in reply
+        assert "Produce product and domain contract" in reply
         assert "Outputs:" in reply
 
 

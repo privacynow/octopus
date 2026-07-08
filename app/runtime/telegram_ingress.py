@@ -403,6 +403,58 @@ async def _send_protocol_status(
     await message.reply_text(rendered.text, **rendered.kwargs())
 
 
+async def _send_protocol_list(
+    runtime: TelegramRuntime,
+    message,
+    protocol_service: ProtocolService,
+    registry_url: str,
+) -> None:
+    try:
+        protocols = await protocol_service.list_launchable()
+    except RegistryClientError as exc:
+        await message.reply_text(f"Failed to list protocols. {exc}")
+        return
+    protocol_links: dict[str, str] = {}
+    for protocol in protocols:
+        protocol_id = str(getattr(protocol, "protocol_id", "") or "").strip()
+        slug = str(getattr(protocol, "slug", "") or "").strip()
+        link = telegram_protocols.protocol_editor_url(runtime, protocol_id or slug, registry_url=registry_url)
+        if not link:
+            continue
+        if protocol_id:
+            protocol_links[protocol_id] = link
+        if slug:
+            protocol_links[slug] = link
+    rendered = telegram_presenters.protocol_list_message(protocols, protocol_links=protocol_links)
+    await message.reply_text(rendered.text, **rendered.kwargs())
+
+
+async def _send_protocol_recent_runs(
+    runtime: TelegramRuntime,
+    message,
+    protocol_service: ProtocolService,
+    registry_url: str,
+) -> None:
+    try:
+        runs = await telegram_protocols.recent_protocol_runs(protocol_service, limit=10)
+    except RegistryClientError as exc:
+        await message.reply_text(f"Failed to list protocol runs. {exc}")
+        return
+    rendered = telegram_presenters.protocol_recent_runs_message(
+        runs,
+        run_links={
+            str(run.protocol_run_id or ""): telegram_protocols.protocol_run_url(
+                runtime,
+                run.protocol_run_id,
+                registry_url=registry_url,
+            )
+            for run in runs
+            if str(run.protocol_run_id or "").strip()
+        },
+    )
+    await message.reply_text(rendered.text, **rendered.kwargs())
+
+
 async def _send_protocol_artifacts(
     runtime: TelegramRuntime,
     message,
@@ -1120,33 +1172,10 @@ async def cmd_protocol(
         await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
         return
     if sub == "list":
-        try:
-            protocols = await protocol_service.list_launchable()
-        except RegistryClientError as exc:
-            await update.effective_message.reply_text(f"Failed to list protocols. {exc}")
-            return
-        rendered = telegram_presenters.protocol_list_message(protocols)
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        await _send_protocol_list(runtime, update.effective_message, protocol_service, registry_url)
         return
     if sub in {"recent", "runs"}:
-        try:
-            runs = await telegram_protocols.recent_protocol_runs(protocol_service, limit=10)
-        except RegistryClientError as exc:
-            await update.effective_message.reply_text(f"Failed to list protocol runs. {exc}")
-            return
-        rendered = telegram_presenters.protocol_recent_runs_message(
-            runs,
-            run_links={
-                str(run.protocol_run_id or ""): telegram_protocols.protocol_run_url(
-                    runtime,
-                    run.protocol_run_id,
-                    registry_url=registry_url,
-                )
-                for run in runs
-                if str(run.protocol_run_id or "").strip()
-            },
-        )
-        await update.effective_message.reply_text(rendered.text, **rendered.kwargs())
+        await _send_protocol_recent_runs(runtime, update.effective_message, protocol_service, registry_url)
         return
     if sub == "auto":
         auto_action = str(args[1] or "").strip().lower() if len(args) >= 2 else ""
@@ -1245,6 +1274,7 @@ async def cmd_protocol(
                 "mode": "revise",
                 "surface": "telegram",
                 "target_protocol_id": protocol_id,
+                "source_run_id": detail.run.protocol_run_id,
                 "requirement_text": telegram_protocols.protocol_run_improvement_requirement(detail, change_request),
                 "constraints_text": telegram_protocols.protocol_run_improvement_constraints(detail),
                 "preferred_design_agent_id": agent_id,
@@ -1628,6 +1658,23 @@ async def handle_protocol_callback(runtime: TelegramRuntime, event, query) -> No
             await message.reply_text(rendered.text, **rendered.kwargs())
             return
         await _send_auto_protocol_session(message, session, runtime, registry_url)
+        return
+    if action == "protocol_start":
+        try:
+            definition = await protocol_service.resolve_launchable(run_ref)
+        except KeyError:
+            await message.reply_text(f"Unknown published protocol: {run_ref}")
+            return
+        except RegistryClientError as exc:
+            await message.reply_text(f"Failed to load the protocol. {exc}")
+            return
+        protocol_id = str(getattr(definition, "protocol_id", "") or "").strip()
+        slug = str(getattr(definition, "slug", "") or "").strip()
+        rendered = telegram_presenters.protocol_launch_hint_message(
+            definition,
+            deep_link=telegram_protocols.protocol_editor_url(runtime, protocol_id or slug, registry_url=registry_url),
+        )
+        await message.reply_text(rendered.text, **rendered.kwargs())
         return
     if action == "status":
         await _send_protocol_status(runtime, event, message, protocol_service, registry_url, run_ref)

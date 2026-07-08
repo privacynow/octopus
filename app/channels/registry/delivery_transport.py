@@ -43,19 +43,24 @@ from octopus_sdk.inbound_types import (
     InboundEnvelope,
     InboundMessage,
     InboundUser,
+    deserialize_inbound,
     serialize_inbound,
 )
 from octopus_sdk.providers import Provider
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.models import RoutedTaskResult
+from octopus_sdk.protocols import ProtocolRuntimeJourneyResultRecord
 from octopus_sdk.registry.management import (
     ArtifactRuntimeFetchRequest,
     ArtifactRuntimeHealthRequest,
     ArtifactRuntimeLogsRequest,
+    CancelRoutedTaskRequest,
+    CancelRoutedTaskResult,
     DesignAutoProtocolRequest,
-    DesignAutoProtocolResult,
     ManagementRequest,
     ManagementResult,
+    RunArtifactJourneyRequest,
+    RunArtifactJourneyResult,
     StartArtifactRuntimeRequest,
     StopArtifactRuntimeRequest,
     WorkspaceCleanupRequest,
@@ -168,6 +173,7 @@ def build_registry_message_delivery(
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
+    runtime_capability_ref: str = "",
     working_dir_hint: str = "",
     attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
@@ -189,6 +195,7 @@ def build_registry_message_delivery(
         constraints_text=constraints_text,
         requested_skills=requested_skills,
         protocol_stage_contract=protocol_stage_contract,
+        runtime_capability_ref=runtime_capability_ref,
         working_dir_hint=working_dir_hint,
         attachments=attachments,
         source_transport=source_transport,
@@ -215,6 +222,7 @@ def build_registry_message_envelope(
     constraints_text: str = "",
     requested_skills: tuple[str, ...] = (),
     protocol_stage_contract: dict[str, Any] | None = None,
+    runtime_capability_ref: str = "",
     working_dir_hint: str = "",
     attachments: tuple[InboundAttachment, ...] = (),
     source_transport: str = "registry",
@@ -247,6 +255,7 @@ def build_registry_message_envelope(
         constraints_text=constraints_text,
         requested_skills=requested_skills,
         protocol_stage_contract=dict(protocol_stage_contract or {}),
+        runtime_capability_ref=str(runtime_capability_ref or ""),
         working_dir_hint=str(working_dir_hint or ""),
         authorized_actor_key=authorized_actor_key,
         authority_ref=registry_implementation_ref(registry_id),
@@ -486,6 +495,12 @@ async def admit_registry_delivery(
             constraints_text=_coerce_registry_message_text(request.get("constraints", "")),
             requested_skills=tuple(str(item).strip() for item in (request.get("requested_skills", []) or ()) if str(item).strip()),
             protocol_stage_contract=_protocol_stage_contract_from_request(request),
+            runtime_capability_ref=str(
+                (request.get("context", {}) or {}).get("runtime_capability", {}).get("capability_ref", "")
+                if isinstance(request.get("context", {}), dict)
+                and isinstance((request.get("context", {}) or {}).get("runtime_capability", {}), dict)
+                else ""
+            ),
             registry_id=registry_id,
             attachments=attachments,
         )
@@ -657,7 +672,7 @@ async def handle_registry_delivery(
         if not registry_id:
             return "rejected"
         routed_task_id = str(payload.get("routed_task_id", ""))
-        if routed_task_id.startswith("protocol-stage:"):
+        if routed_task_id.startswith("protocol-stage:") or routed_task_id.startswith("auto-design:"):
             return "accepted"
         parent_conversation_id = qualify_registry_parent_ref(
             registry_id,
@@ -736,31 +751,13 @@ async def handle_registry_delivery(
         if not state.agent_token:
             return "retry_later"
         if isinstance(request.payload, DesignAutoProtocolRequest):
-            from app.runtime.auto_protocol_design import design_auto_protocol_with_provider
-
-            try:
-                if runtime.provider is None:
-                    raise RuntimeError("Auto Protocol planner requires a provider-capable runtime.")
-                response = await design_auto_protocol_with_provider(
-                    request.payload.request,
-                    config=config,
-                    provider=runtime.provider,
-                    provider_state_factory=runtime.provider_state_factory,
-                )
-                result = ManagementResult(
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    success=True,
-                    payload=DesignAutoProtocolResult(response=response),
-                )
-            except Exception as exc:
-                result = ManagementResult(
-                    request_id=request.request_id,
-                    agent_id=request.agent_id,
-                    success=False,
-                    error_code="request_failed",
-                    error_detail=str(exc),
-                )
+            result = ManagementResult(
+                request_id=request.request_id,
+                agent_id=request.agent_id,
+                success=False,
+                error_code="auto_design_requires_routed_task",
+                error_detail="Auto Protocol design uses routed tasks; management-channel design requests are no longer executed.",
+            )
         elif isinstance(
             request.payload,
             (
@@ -769,6 +766,8 @@ async def handle_registry_delivery(
                 ArtifactRuntimeHealthRequest,
                 ArtifactRuntimeLogsRequest,
                 ArtifactRuntimeFetchRequest,
+                RunArtifactJourneyRequest,
+                CancelRoutedTaskRequest,
                 WorkspaceUsageRequest,
                 WorkspaceCleanupRequest,
             ),
@@ -795,6 +794,112 @@ async def handle_registry_delivery(
                     from app.runtime import workspace_hygiene
 
                     payload = await workspace_hygiene.workspace_cleanup(request.payload, config=config)
+                elif isinstance(request.payload, RunArtifactJourneyRequest):
+                    async def _run_and_post_journey(
+                        *,
+                        registry_url: str,
+                        agent_token: str,
+                        journey_request: RunArtifactJourneyRequest,
+                    ) -> None:
+                        from app.runtime.browser_journey import run_browser_journey
+
+                        registry_client = RegistryClient(registry_url, agent_token=agent_token)
+                        result: ProtocolRuntimeJourneyResultRecord
+                        bearer = ""
+                        try:
+                            exchange = await registry_client.exchange_runtime_capability(journey_request.capability_ref)
+                            bearer = str(exchange.get("bearer_token", "") or "").strip()
+                            if not bearer:
+                                raise RuntimeError(str(exchange.get("message", "") or "Runtime capability exchange failed."))
+                            result = await run_browser_journey(
+                                journey_request.spec,
+                                registry_url=journey_request.registry_url or registry_url,
+                                bearer_token=bearer,
+                                journey_run_id=journey_request.journey_run_id,
+                            )
+                        except Exception as exc:
+                            result = ProtocolRuntimeJourneyResultRecord(
+                                protocol_run_id=journey_request.protocol_run_id,
+                                artifact_key=journey_request.artifact_key,
+                                journey_key=journey_request.journey_key,
+                                journey_run_id=journey_request.journey_run_id,
+                                ok=False,
+                                status="failed",
+                                summary=str(exc),
+                            )
+                        if not bearer:
+                            log.warning(
+                                "runtime journey %s for run %s could not post result because capability exchange failed: %s",
+                                journey_request.journey_key,
+                                journey_request.protocol_run_id,
+                                result.summary,
+                            )
+                            return
+                        try:
+                            await RegistryClient(registry_url).protocol_runtime_journey_result(
+                                run_id=journey_request.protocol_run_id,
+                                artifact_key=journey_request.artifact_key,
+                                journey_key=journey_request.journey_key,
+                                bearer_token=bearer,
+                                result=result,
+                            )
+                        except Exception:
+                            log.warning(
+                                "runtime journey %s for run %s failed to post result",
+                                journey_request.journey_key,
+                                journey_request.protocol_run_id,
+                                exc_info=True,
+                            )
+
+                    asyncio.create_task(
+                        _run_and_post_journey(
+                            registry_url=registry.url,
+                            agent_token=state.agent_token,
+                            journey_request=request.payload,
+                        )
+                    )
+                    payload = RunArtifactJourneyResult(
+                        result=ProtocolRuntimeJourneyResultRecord(
+                            protocol_run_id=request.payload.protocol_run_id,
+                            artifact_key=request.payload.artifact_key,
+                            journey_key=request.payload.journey_key,
+                            journey_run_id=request.payload.journey_run_id,
+                            ok=False,
+                            status="queued",
+                            summary="Journey queued on bot runner.",
+                        )
+                    )
+                elif isinstance(request.payload, CancelRoutedTaskRequest):
+                    matched_item = None
+                    for item in work_queue.list_incomplete_work_items(config.data_dir):
+                        raw_payload = item.payload or work_queue.get_update_payload(config.data_dir, item.event_id) or ""
+                        try:
+                            inbound = deserialize_inbound(item.kind, raw_payload)
+                        except Exception:
+                            continue
+                        if str(getattr(inbound, "routed_task_id", "") or "") == str(request.payload.routed_task_id or ""):
+                            matched_item = item
+                            break
+                    if matched_item is None:
+                        payload = CancelRoutedTaskResult(
+                            routed_task_id=request.payload.routed_task_id,
+                            requested=False,
+                            status="not_found",
+                            message="No active local work item matched this routed task.",
+                        )
+                    else:
+                        result = work_queue.request_cancel(
+                            config.data_dir,
+                            matched_item.conversation_key,
+                            "registry-management",
+                            cancel_request_event_id=f"cancel-routed-task:{request.payload.routed_task_id}:{request.request_id}",
+                        )
+                        payload = CancelRoutedTaskResult(
+                            routed_task_id=request.payload.routed_task_id,
+                            requested=result != work_queue.CancelRequestResult.nothing_to_cancel,
+                            status=str(result.value if hasattr(result, "value") else result),
+                            message="Cancel request recorded for routed task.",
+                        )
                 else:
                     payload = await artifact_runtime.artifact_runtime_fetch(request.payload)
                 result = ManagementResult(
@@ -1026,7 +1131,7 @@ class RegistryDeliveryTransport(TransportImplementation):
         if registry_scope == "channel":
             return ("channel_input", "channel_action", "management_request")
         if registry_scope == "coordination":
-            return ("routed_task", "routed_result")
+            return ("routed_task", "routed_result", "management_request")
         return None
 
 

@@ -410,6 +410,23 @@ def normalize_single_project_session(
     return True
 
 
+def normalize_provider_session(
+    session: SessionState,
+    *,
+    provider_name: str,
+    provider_state_factory: ProviderStateFactory,
+    conversation_key: str,
+) -> bool:
+    if session.provider == provider_name:
+        return False
+    session.provider = provider_name
+    session.provider_state = coerce_provider_state(provider_state_factory(conversation_key))
+    session.clear_pending()
+    session.awaiting_skill_setup = None
+    session.pending_delegation = None
+    return True
+
+
 def default_session(
     provider_name: str,
     provider_state: ProviderStateInput | ProviderStateFactory,

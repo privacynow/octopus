@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 
@@ -60,6 +61,15 @@ def test_data_fetching_route_components_use_sync_shell_rendering_contract() -> N
         assert "async function render" not in text, f"{name} must not use async route rendering"
         assert "createSkeletonNodes" not in text, f"{name} must not render route-transition skeletons"
         assert "__routeReady" in text, f"{name} must publish an initial route readiness promise"
+
+
+def test_ui_query_param_updates_do_not_push_duplicate_history_entries() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    ui_js = (repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js").read_text(encoding="utf-8")
+
+    assert "const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;" in ui_js
+    assert "if (next === current) return;" in ui_js
+    assert ui_js.index("if (next === current) return;") < ui_js.index("history.pushState(null, '', next);")
 
 
 def test_management_views_request_agent_pages_with_supported_limit() -> None:
@@ -243,6 +253,9 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "API.getProtocolRun(requestedRunId)" in workspace
     assert "API.listProtocolIssues({" in workspace
     assert "API.actOnProtocolRun(" in workspace
+    assert "mutation = await API.actOnProtocolRun(" in workspace
+    assert "_renderRunActionBlockedResult(mutation, currentRun)" in workspace
+    assert "Number(err?.status || 0) === 409" in workspace
     assert "btn.dataset.runAction = spec.action;" in workspace
     assert "event.currentTarget?.dataset?.runAction" in workspace
     assert "spec.action === 'cancel' ? 'btn btn-danger' : 'btn btn-primary'" in workspace
@@ -256,6 +269,13 @@ def test_protocol_workspace_uses_shared_protocol_contract_and_accessible_operato
     assert "UI.subscribeWithRefresh(cleanups, 'tasks'" in workspace
     assert "transitionList.setAttribute('aria-live', 'polite');" in workspace
     assert "role: 'alertdialog'" in workspace
+    assert "const runDisclosureState = new Map();" in workspace
+    assert "function _bindRunDisclosure(" in workspace
+    assert "issue.task_updated_at" in workspace
+    assert "task updated ${UI.relativeTime(issue.task_updated_at)" in workspace
+    assert "dataset.disclosureKey" in (
+        repo_root / "octopus_registry" / "ui" / "js" / "helpers" / "ui.js"
+    ).read_text(encoding="utf-8")
 
     # Runs-side copy stays; empty/hint strings for the catalog now flow
     # through Kit.dict.
@@ -340,6 +360,74 @@ def test_protocol_routes_split_authoring_and_operations_without_mixed_workspace_
     assert "Router.register('/ui/runs', renderProtocolRuns);" in app_js
     assert "Router.register('/ui/protocol-runs', renderProtocolRuns);" not in app_js
     assert "path.startsWith('/ui/protocol-runs')" not in router_js
+
+
+def test_improve_run_apply_adopts_the_applied_protocol_draft() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    dialog_match = re.search(
+        r"function _openImproveRunDialog\(\) \{(?P<body>.*?)\n    function _buildRunActionBar",
+        workspace,
+        flags=re.S,
+    )
+    assert dialog_match is not None
+    dialog_body = dialog_match.group("body")
+    apply_match = re.search(
+        r"const runApplyImprovement = async \(\) => \{(?P<body>.*?)\n        \};\n        applyBtn\.addEventListener\('click', \(\) => void runApplyImprovement\(\)\);",
+        dialog_body,
+        flags=re.S,
+    )
+    assert apply_match is not None
+    apply_body = apply_match.group("body")
+
+    assert "const applied = await _autoProtocolRunAction(session.session_id, 'apply');" in apply_body
+    assert "API.applyProtocolAutoSession(session.session_id)" not in apply_body
+    assert "const protocolId = _autoProtocolTargetProtocolId(applied);" in apply_body
+    assert "if (protocolId) {" in apply_body
+    assert "view.close();" in apply_body
+    assert "Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);" in apply_body
+    assert "Draft applied. Open the protocol editor" not in apply_body
+
+
+def test_protocol_runs_does_not_read_workspace_closure_helpers() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    workspace = (
+        repo_root / "octopus_registry" / "ui" / "js" / "components" / "protocol-workspace.js"
+    ).read_text(encoding="utf-8")
+
+    def function_body(name: str) -> str:
+        start = workspace.index(f"function {name}(")
+        brace = workspace.index("{", start)
+        depth = 0
+        for index in range(brace, len(workspace)):
+            char = workspace[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return workspace[brace + 1:index]
+        raise AssertionError(f"Could not locate body for {name}")
+
+    def declared_underscore_names(body: str) -> set[str]:
+        names = set(re.findall(r"(?:^|\n)\s*function\s+(_[A-Za-z_$][\w$]*)\s*\(", body))
+        names.update(re.findall(r"(?:^|\n)\s*(?:const|let|var)\s+(_[A-Za-z_$][\w$]*)\s*=", body))
+        return names
+
+    workspace_body = function_body("renderProtocolWorkspace")
+    runs_body = function_body("renderProtocolRuns")
+    workspace_names = declared_underscore_names(workspace_body)
+    runs_names = declared_underscore_names(runs_body)
+    leaked_reads = sorted(
+        name
+        for name in workspace_names - runs_names
+        if re.search(rf"\b{re.escape(name)}\b", runs_body)
+    )
+
+    assert leaked_reads == []
 
 
 def test_protocol_artifact_runtime_controls_recover_after_status_or_start_failures() -> None:
@@ -884,7 +972,7 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "label: 'Agents needing attention'" in dashboard
     assert "function visibleDashboardAgents()" in dashboard
     assert "function dashboardAgentHealth(summary)" in dashboard
-    assert "label: 'Active or stuck runs'" in dashboard
+    assert "label: 'Active protocol runs'" in dashboard
     assert "with issues" in dashboard
     assert "label: 'Usage review'" in dashboard
     assert "label: 'Tokens · 24h'" not in dashboard
@@ -893,6 +981,35 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "value: String(summary.tasks?.running || 0)" not in dashboard
     assert "value: String(summary.tasks?.failed_24h || 0)" not in dashboard
     assert "value: String(summary.agents?.connected || 0)" not in dashboard
+
+
+def test_catalog_cards_clamp_long_summary_text() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    item_rule = css.split(".kit-catalog-item {", 1)[1].split("}", 1)[0]
+    card_rule = css.split(".kit-catalog-card {", 1)[1].split("}", 1)[0]
+    title_rule = css.split(".kit-catalog-card-title {", 1)[1].split("}", 1)[0]
+    slug_rule = css.split(".kit-catalog-card-slug {", 1)[1].split("}", 1)[0]
+    body_rule = css.split(".kit-catalog-card-body {", 1)[1].split("}", 1)[0]
+
+    assert "min-width: 0;" in item_rule
+    assert "overflow: hidden;" in item_rule
+    assert "min-width: 0;" in card_rule
+    assert "overflow: hidden;" in card_rule
+    assert "height: auto;" in card_rule
+    assert "max-height: 16rem;" in card_rule
+    assert "align-self: start;" in card_rule
+    assert "-webkit-line-clamp: 2;" in title_rule
+    assert "max-height: calc(1.35em * 2);" in title_rule
+    assert "overflow-wrap: anywhere;" in title_rule
+    assert "overflow: hidden;" in title_rule
+    assert "text-overflow: ellipsis;" in slug_rule
+    assert "white-space: nowrap;" in slug_rule
+    assert "-webkit-line-clamp: 4;" in body_rule
+    assert "max-height: calc(1.55em * 4);" in body_rule
+    assert "overflow-wrap: anywhere;" in body_rule
+    assert "overflow: hidden;" in body_rule
 
 
 def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
@@ -1188,15 +1305,100 @@ def test_auto_protocol_errors_are_persistent_and_actionable_in_dialog() -> None:
 
     assert "function _autoProtocolErrorMessage(label, err)" in workspace
     assert "function _setAutoProtocolDialogError(preview, status, label, err, retryFn)" in workspace
+    assert "function _autoProtocolPlanning(session)" in workspace
+    assert "function _autoProtocolHasDraft(session)" in workspace
+    assert "function _subscribeAutoProtocolSession(sessionId, onUpdate)" in workspace
+    assert "function _setAutoProtocolButtonBusy(button, busy)" in workspace
+    assert "function _setAutoProtocolButtonState(button, { visible = true, disabled = false } = {})" in workspace
+    assert "function _autoProtocolRunAttemptKey(sessionId)" in workspace
+    assert "function _autoProtocolSessionMatchesRememberedContext(session" in workspace
+    assert "auto-protocol-session:${normalized}:run:${nonce}" in workspace
+    assert "auto-protocol-session:${session.session_id}:run" not in workspace
+    assert "auto-protocol-session:${sessionId}:run" not in workspace
+    assert "sourceRunId: sourceRun.run.protocol_run_id" in workspace
+    assert "mode: isRevision ? 'revise' : 'create'" in workspace
+    assert "button.hidden = !shown;" in workspace
+    assert "button.disabled = true;" in workspace
+    assert "button.tabIndex = -1;" in workspace
+    assert "button.setAttribute('aria-hidden', 'true');" in workspace
+    assert "button.removeAttribute('aria-hidden');" in workspace
+    assert "button.removeAttribute('tabindex');" in workspace
+    assert "_setAutoProtocolButtonState(applyBtn, { visible: actionable });" in workspace
+    assert "_setAutoProtocolButtonState(queueBtn, { visible: hasSession });" in workspace
+    assert "applyBtn.hidden = !actionable;" not in workspace
+    assert "queueBtn.hidden = !hasSession;" not in workspace
+    assert "let activeAutoProtocolSessionId = '';" in workspace
+    assert "function _rememberActiveAutoProtocolSession(session)" in workspace
+    assert "let activeAutoProtocolSessionId = '';" not in workspace[workspace.index("function renderProtocolWorkspace"):]
+    assert "ignoreRememberedSession = false" in workspace
+    assert "requirePlanning: !explicitSessionId" in workspace
+    assert "ignoreRememberedSession: true" in workspace
+    assert "const updated = await API.getProtocolAutoSession(session.session_id);" in workspace
+    assert "Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running." in workspace
+    assert "Auto Protocol is still designing. The dialog reattached to the active planner job." in workspace
+    assert "planning = _autoProtocolPlanning(session)" in workspace
+    assert "actionable = hasSession && !planning && hasDraft" in workspace
+    assert "plannerField.select.value" in workspace
+    assert "preferred_design_agent_id: plannerField.select.value" in workspace
+    assert "status.textContent = 'The operation did not complete. Review the error details below.';" in workspace
+    assert "code === 'CONCURRENT_MODIFICATION'" in workspace
+    assert "code === 'PROTOCOL_AUTO_PLANNING'" not in workspace[workspace.index("function _autoProtocolErrorEl") : workspace.index("function _setAutoProtocolStatus")]
+    assert "let retrying = false;" in workspace
+    assert "const retryOnce = retryable" in workspace
+    assert "generateBtn.click()" not in workspace
+    assert "applyBtn.click()" not in workspace
+    assert "publishBtn.click()" not in workspace
+    assert "runBtn.click()" not in workspace
+    assert "void refreshSessionState" not in workspace
+    assert "function _autoProtocolErrorSessionId(err)" in workspace
+    assert "attachedSessionId" in workspace
     assert "UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);" in workspace
+    assert "function _autoProtocolQueueEl({ full = false } = {})" in workspace
+    assert "function _autoProtocolDesignSessionsRouteEl()" in workspace
+    assert "Router.navigate('/ui/design-sessions')" in workspace
+    assert "Router.navigate(`/ui/design-sessions?session_id=${encodeURIComponent(session.session_id)}`)" in workspace
+    assert "Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`)" in workspace
+    assert "Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`)" in workspace
+    assert "selectedAutoProtocolSessionId = String(nextSession?.session_id || '');" in workspace
+    assert "Planner jobs keep running after a dialog closes." in workspace
+    assert "function _autoProtocolSessionStatusBadgeClass(session)" in workspace
+    assert "function _autoProtocolSessionBody(session)" in workspace
+    assert "function _autoProtocolSessionCard(session, { onOpen = null, selected = false } = {})" in workspace
+    assert "if (selected) card.classList.add('selected');" in workspace
+    assert "badge.className = `badge ${_autoProtocolSessionStatusBadgeClass(session)}`;" in workspace
+    assert "open.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id }));" not in workspace
+    assert "open.textContent = String(session?.status || '') === 'planning' ? 'Open progress' : 'Open design';" not in workspace
+    assert "loadAutoProtocolSessions({ quiet: true })" in workspace
+    assert "const rawNextCursor = payload?.next_cursor;" in workspace
+    assert "!Number.isFinite(parsedNextCursor)" in workspace
+    assert "next.disabled = autoProtocolSessionsNextCursor === null;" in workspace
+    assert "autoProtocolQueueActionInFlight" in workspace
+    assert "idempotency_key: _autoProtocolRunAttemptKey(normalizedSessionId)" in workspace
+    assert "_autoProtocolSelectedAgentLabel(session" in workspace
     assert "card.setAttribute('role', 'alert');" in workspace
     assert "closeOnOverlay: false" in workspace
+    assert "closeOnEscape: false" in workspace
     assert workspace.count("closeOnOverlay: false") >= 2
+    assert workspace.count("closeOnEscape: false") >= 2
     assert "UI.reportError('Failed to generate protocol'" not in workspace
     assert "UI.reportError('Failed to generate the run improvement'" not in workspace
     assert "status.textContent = 'Generation failed.'" not in workspace
     assert ".protocol-auto-error-note" in css
     assert ".protocol-auto-error.error-card" in css
+    assert ".protocol-auto-session-card .badge" in css
+    assert ".protocol-auto-session-card.selected" in css
+    assert ".protocol-auto-design-sessions-route" in css
+    assert ".protocol-auto-queue .kit-catalog-controls" in css
+
+    app = (repo_root / "octopus_registry" / "ui" / "js" / "app.js").read_text(encoding="utf-8")
+    index = (repo_root / "octopus_registry" / "ui" / "index.html").read_text(encoding="utf-8")
+    assert "Router.register('/ui/design-sessions', renderProtocolWorkspace);" in app
+    assert 'href="/ui/design-sessions"' in index
+
+    api = (repo_root / "octopus_registry" / "ui" / "js" / "api.js").read_text(encoding="utf-8")
+    assert "createProtocolAutoSession: (body = {}) =>\n            request('POST', '/v1/protocol-auto/sessions', { body })," in api
+    assert "listProtocolAutoSessions: (params = {}) =>\n            request('GET', '/v1/protocol-auto/sessions', { params })," in api
+    assert "reviseProtocolAutoSession: (sessionId, body = {}) =>\n            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body })," in api
 
 
 def test_protocol_authoring_exposes_real_run_separate_from_rehearsal() -> None:

@@ -327,6 +327,41 @@
         "title": "CancelDelegationActionPayload",
         "type": "object"
       },
+      "CancelRoutedTaskResult": {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "default": "",
+            "title": "Message",
+            "type": "string"
+          },
+          "operation": {
+            "const": "cancel_routed_task",
+            "default": "cancel_routed_task",
+            "title": "Operation",
+            "type": "string"
+          },
+          "requested": {
+            "default": false,
+            "title": "Requested",
+            "type": "boolean"
+          },
+          "routed_task_id": {
+            "title": "Routed Task Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "routed_task_id"
+        ],
+        "title": "CancelRoutedTaskResult",
+        "type": "object"
+      },
       "CancelTaskActionPayload": {
         "additionalProperties": false,
         "properties": {
@@ -1492,6 +1527,7 @@
                     "artifact_runtime_fetch": "#/components/schemas/ArtifactRuntimeFetchResult",
                     "artifact_runtime_health": "#/components/schemas/ArtifactRuntimeHealthResult",
                     "artifact_runtime_logs": "#/components/schemas/ArtifactRuntimeLogsResult",
+                    "cancel_routed_task": "#/components/schemas/CancelRoutedTaskResult",
                     "catalog_skill_detail": "#/components/schemas/CatalogSkillDetailResult",
                     "catalog_skill_lifecycle_detail": "#/components/schemas/CatalogSkillLifecycleDetailResult",
                     "clear_conversation_skills": "#/components/schemas/ClearConversationSkillsResult",
@@ -1514,6 +1550,7 @@
                     "reject_provider_guidance": "#/components/schemas/RejectProviderGuidanceResult",
                     "reset_conversation": "#/components/schemas/ResetConversationResult",
                     "reset_execution_fault": "#/components/schemas/ResetExecutionFaultResult",
+                    "run_artifact_journey": "#/components/schemas/RunArtifactJourneyResult",
                     "search_catalog_skills": "#/components/schemas/SearchCatalogSkillsResult",
                     "set_conversation_setting": "#/components/schemas/SetConversationSettingResult",
                     "start_artifact_runtime": "#/components/schemas/StartArtifactRuntimeResult",
@@ -1645,6 +1682,12 @@
                   },
                   {
                     "$ref": "#/components/schemas/ArtifactRuntimeFetchResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/RunArtifactJourneyResult"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CancelRoutedTaskResult"
                   },
                   {
                     "$ref": "#/components/schemas/WorkspaceUsageResult"
@@ -1825,7 +1868,10 @@
                   "stopped",
                   "archived",
                   "deleted",
-                  "failed"
+                  "failed",
+                  "journey_requested",
+                  "journey_completed",
+                  "journey_failed"
                 ],
                 "type": "string"
               },
@@ -2146,6 +2192,13 @@
             "title": "Startup Timeout Seconds",
             "type": "integer"
           },
+          "test_hooks": {
+            "items": {
+              "$ref": "#/components/schemas/ProtocolRuntimeTestHookRecord"
+            },
+            "title": "Test Hooks",
+            "type": "array"
+          },
           "ui_path": {
             "default": "/",
             "title": "Ui Path",
@@ -2211,6 +2264,9 @@
             "title": "Assumptions",
             "type": "array"
           },
+          "contract_skeleton": {
+            "$ref": "#/components/schemas/RegistryJsonRecord"
+          },
           "domain": {
             "default": "requirement-specific",
             "title": "Domain",
@@ -2230,6 +2286,11 @@
           },
           "primary_artifact": {
             "$ref": "#/components/schemas/ProtocolAutoDesignPrimaryArtifactRecord"
+          },
+          "product_class": {
+            "default": "",
+            "title": "Product Class",
+            "type": "string"
           },
           "requirement_summary": {
             "default": "",
@@ -2618,6 +2679,144 @@
           }
         },
         "title": "ProtocolRunCreateRecord",
+        "type": "object"
+      },
+      "ProtocolRunForkRequestRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "fork_mode": {
+            "default": "rerun_selected",
+            "enum": [
+              "rerun_selected",
+              "continue_after"
+            ],
+            "title": "Fork Mode",
+            "type": "string"
+          },
+          "fork_reason": {
+            "default": "",
+            "title": "Fork Reason",
+            "type": "string"
+          },
+          "stage_execution_id": {
+            "default": "",
+            "title": "Stage Execution Id",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolRunForkRequestRecord",
+        "type": "object"
+      },
+      "ProtocolRuntimeCapabilityExchangeRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "capability_ref": {
+            "default": "",
+            "title": "Capability Ref",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolRuntimeCapabilityExchangeRecord",
+        "type": "object"
+      },
+      "ProtocolRuntimeJourneyResultRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_key": {
+            "default": "",
+            "title": "Artifact Key",
+            "type": "string"
+          },
+          "assertions": {
+            "items": {
+              "$ref": "#/components/schemas/RegistryJsonRecord"
+            },
+            "title": "Assertions",
+            "type": "array"
+          },
+          "console_errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Console Errors",
+            "type": "array"
+          },
+          "duration_ms": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "journey_key": {
+            "default": "",
+            "title": "Journey Key",
+            "type": "string"
+          },
+          "journey_run_id": {
+            "default": "",
+            "title": "Journey Run Id",
+            "type": "string"
+          },
+          "metadata_json": {
+            "$ref": "#/components/schemas/RegistryJsonRecord"
+          },
+          "ok": {
+            "default": false,
+            "title": "Ok",
+            "type": "boolean"
+          },
+          "protocol_run_id": {
+            "default": "",
+            "title": "Protocol Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "",
+            "title": "Status",
+            "type": "string"
+          },
+          "summary": {
+            "default": "",
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolRuntimeJourneyResultRecord",
+        "type": "object"
+      },
+      "ProtocolRuntimeTestHookRecord": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "default": "",
+            "title": "Description",
+            "type": "string"
+          },
+          "hook": {
+            "default": "",
+            "title": "Hook",
+            "type": "string"
+          },
+          "kind": {
+            "default": "other",
+            "enum": [
+              "button",
+              "input",
+              "text",
+              "region",
+              "link",
+              "other"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "selector": {
+            "default": "",
+            "title": "Selector",
+            "type": "string"
+          }
+        },
+        "title": "ProtocolRuntimeTestHookRecord",
         "type": "object"
       },
       "ProviderGuidanceDetailResult": {
@@ -3178,6 +3377,25 @@
           "$ref": "#/components/schemas/JsonValue"
         },
         "title": "RoutedTaskContextRecord",
+        "type": "object"
+      },
+      "RunArtifactJourneyResult": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "const": "run_artifact_journey",
+            "default": "run_artifact_journey",
+            "title": "Operation",
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProtocolRuntimeJourneyResultRecord"
+          }
+        },
+        "required": [
+          "result"
+        ],
+        "title": "RunArtifactJourneyResult",
         "type": "object"
       },
       "RuntimeSkillCatalogItemRecord": {
@@ -5868,6 +6086,79 @@
           }
         },
         "summary": "Routed Task Status"
+      }
+    },
+    "/v1/agents/runtime-capabilities/exchange": {
+      "post": {
+        "operationId": "resource_exchange_runtime_capability_v1_agents_runtime_capabilities_exchange_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtocolRuntimeCapabilityExchangeRecord"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Exchange Runtime Capability V1 Agents Runtime Capabilities Exchange Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Exchange Runtime Capability"
       }
     },
     "/v1/agents/{agent_id}": {
@@ -10219,6 +10510,101 @@
       }
     },
     "/v1/protocol-auto/sessions": {
+      "get": {
+        "operationId": "resource_list_protocol_auto_sessions_v1_protocol_auto_sessions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Status",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Cursor",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource List Protocol Auto Sessions V1 Protocol Auto Sessions Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource List Protocol Auto Sessions"
+      },
       "post": {
         "operationId": "resource_create_protocol_auto_session_v1_protocol_auto_sessions_post",
         "parameters": [
@@ -12399,6 +12785,279 @@
         "summary": "Resource Get Protocol Artifact Runtime Health"
       }
     },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}": {
+      "get": {
+        "operationId": "resource_get_protocol_artifact_runtime_journey_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_journeys__journey_key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journey_key",
+            "required": true,
+            "schema": {
+              "title": "Journey Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Get Protocol Artifact Runtime Journey V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Runtime Journeys  Journey Key  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Get Protocol Artifact Runtime Journey"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}/results": {
+      "post": {
+        "operationId": "resource_post_protocol_artifact_runtime_journey_result_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_journeys__journey_key__results_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journey_key",
+            "required": true,
+            "schema": {
+              "title": "Journey Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Post Protocol Artifact Runtime Journey Result V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Runtime Journeys  Journey Key  Results Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Post Protocol Artifact Runtime Journey Result"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}/run": {
+      "post": {
+        "operationId": "resource_run_protocol_artifact_runtime_journey_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_journeys__journey_key__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_key",
+            "required": true,
+            "schema": {
+              "title": "Artifact Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "journey_key",
+            "required": true,
+            "schema": {
+              "title": "Journey Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Run Protocol Artifact Runtime Journey V1 Protocol Runs  Run Id  Artifacts  Artifact Key  Runtime Journeys  Journey Key  Run Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Run Protocol Artifact Runtime Journey"
+      }
+    },
     "/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/logs": {
       "get": {
         "operationId": "resource_get_protocol_artifact_runtime_logs_v1_protocol_runs__run_id__artifacts__artifact_key__runtime_logs_get",
@@ -13213,6 +13872,105 @@
           }
         },
         "summary": "Resource Export Protocol Run"
+      }
+    },
+    "/v1/protocol-runs/{run_id}/fork-from-stage": {
+      "post": {
+        "operationId": "resource_fork_protocol_run_from_stage_v1_protocol_runs__run_id__fork_from_stage_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-csrf-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Csrf-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProtocolRunForkRequestRecord"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Resource Fork Protocol Run From Stage V1 Protocol Runs  Run Id  Fork From Stage Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Resource Fork Protocol Run From Stage"
       }
     },
     "/v1/protocol-runs/{run_id}/participants": {

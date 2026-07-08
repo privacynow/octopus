@@ -24,6 +24,7 @@ from .core import (
     protocol_review_edge_key,
     protocol_participant_session_key,
     protocol_retention_until,
+    protocol_stage_effective_timeout_seconds,
     protocol_stage_internal_context,
     render_protocol_stage_prompt,
     stage_target_for_decision,
@@ -161,9 +162,10 @@ class ProtocolRunEngine:
         lease_owner: str,
         lease_ttl_seconds: int,
     ) -> ProtocolDispatchDecisionRecord:
+        timeout_seconds = protocol_stage_effective_timeout_seconds(document, stage)
         timeout_at = ""
-        if stage.timeout_seconds > 0:
-            timeout_at = _iso_plus_seconds(now, stage.timeout_seconds)
+        if timeout_seconds > 0:
+            timeout_at = _iso_plus_seconds(now, timeout_seconds)
         if not stage.write_capable or not document.policies.single_active_writer:
             return ProtocolDispatchDecisionRecord(
                 ok=True,
@@ -531,6 +533,38 @@ class ProtocolRunEngine:
                 transition_kind="terminal",
                 transition_reason=summary,
                 terminal_status="cancelled",
+                transition_metadata=transition_metadata,
+                retention_until=retention_until,
+            )
+        if action == "interrupt":
+            run_status = str(run.status or "").strip().lower()
+            stage_status = str(stage_execution.status or "").strip().lower()
+            if run_status not in {"queued", "running"} or stage_status not in {"queued", "running"}:
+                detail = (
+                    f"Stage {stage.stage_key} cannot be interrupted from run status "
+                    f"{run.status} and stage status {stage_execution.status}."
+                )
+                return ProtocolEngineDecisionRecord(
+                    run_status=run.status,
+                    stage_status=stage_execution.status,
+                    failure_code="invalid_interrupt_state",
+                    failure_detail=detail,
+                    transition_kind="invalid",
+                    transition_reason=detail,
+                    transition_error_code="INVALID_INTERRUPT_STATE",
+                    retention_until=retention_until,
+                )
+            return ProtocolEngineDecisionRecord(
+                run_status="blocked",
+                stage_status="blocked",
+                summary=summary,
+                failure_code="operator_interrupted",
+                failure_detail=summary,
+                transition_kind="blocked",
+                transition_reason=summary,
+                transition_error_code="OPERATOR_INTERRUPTED",
+                run_blocked_code="operator_interrupted",
+                run_blocked_detail=summary,
                 transition_metadata=transition_metadata,
                 retention_until=retention_until,
             )

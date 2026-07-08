@@ -39,7 +39,9 @@ from app.storage import default_session, ensure_data_dirs, load_session, save_se
 from octopus_sdk.identity import telegram_actor_key, telegram_conversation_key
 from octopus_sdk.protocols import (
     ProtocolArtifactRecord,
+    ProtocolArtifactSnapshotRecord,
     ProtocolArtifactRuntimeActionResultRecord,
+    ProtocolArtifactRuntimeEventRecord,
     ProtocolArtifactRuntimeHealthRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
@@ -53,6 +55,8 @@ from octopus_sdk.protocols import (
     ProtocolRunDetailRecord,
     ProtocolRunMutationRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
+    ProtocolStageExecutionRecord,
     generate_auto_protocol_session,
 )
 from octopus_sdk.registry.management import (
@@ -69,12 +73,13 @@ from octopus_sdk.registry.management import (
     WorkspaceCleanupRequest,
     WorkspaceCleanupResult,
 )
-from octopus_sdk.registry.models import AgentRecord, RegistryJsonRecord, TaskRecord
+from octopus_sdk.registry.models import AgentRecord, ConversationRecord, RegistryJsonRecord, RoutedTaskRequest, TaskRecord
 from octopus_sdk.registry.management_executor import (
     ManagementExecutionContext,
     execute_management_request,
 )
 from octopus_sdk.providers import ProviderStateRecord
+from octopus_sdk.resources import ResourceRecord
 from octopus_sdk.skill_packages import SkillPackageRecord, skill_document_to_text, skill_package_document
 
 _FULL_MANAGEMENT_OPERATIONS = list(ALL_MANAGEMENT_OPERATIONS)
@@ -539,6 +544,7 @@ def test_registry_list_agents_supports_query_and_state_filters(monkeypatch, tmp_
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
     _login_ui(client)
+    csrf = _ui_csrf_token(client)
 
     _alpha_id, _alpha_token = _enroll_and_register(client, "Alpha Reviewer", "alpha-reviewer")
     _beta_id, beta_token = _enroll_and_register(client, "Beta Builder", "beta-builder")
@@ -1805,39 +1811,42 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                 supported_admin_operations=["design_auto_protocol"],
             )
 
-        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
-            return request
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
 
-        def get_management_result(self, request_id: str):
-            return ManagementResult(
-                request_id=request_id,
-                agent_id="agent-1",
-                success=True,
-                payload=DesignAutoProtocolResult(
-                    response=_auto_design_model_response("experience_design", "domain_grounding", "supporting_assets")
-                ),
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task = request
+            assert request.routed_task_id.startswith("auto-design:")
+            assert request.context.get("task_source_kind") == "auto_design"
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
             )
 
         def list_routing_skills(self):
             return []
 
-        def create_protocol_auto_design_session(self, payload, *, access):
-            self.session = generate_auto_protocol_session(
-                payload,
-                session_id="auto-1",
-                created_at="2026-04-16T00:00:00+00:00",
-                updated_at="2026-04-16T00:00:00+00:00",
-            )
-            return self.session
-
         def get_protocol_auto_design_session(self, session_id: str, *, access):
-            assert session_id == "auto-1"
             if self.session is None:
                 raise KeyError(session_id)
+            assert session_id == self.session.session_id
             return self.session
 
         def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
-            assert event_kind in {"applied", "published", "run_started"}
+            assert event_kind in {"planning_started", "generated", "applied", "published", "run_started"}
             self.session = session
             return session
 
@@ -1853,7 +1862,7 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
             authoring_surface="standard",
             expected_revision=None,
         ):
-            assert authoring_surface == "standard"
+            assert authoring_surface == "operator"
             assert slug
             return ProtocolMutationRecord(
                 ok=True,
@@ -1940,21 +1949,272 @@ def test_protocol_auto_routes_create_apply_publish_and_run(monkeypatch, tmp_path
                 "requirement_text": "Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
             },
         )
-        apply_response = client.post("/v1/protocol-auto/sessions/auto-1/apply")
-        publish_response = client.post("/v1/protocol-auto/sessions/auto-1/publish")
-        run_response = client.post("/v1/protocol-auto/sessions/auto-1/run", json={"origin_channel": "registry"})
+        assert create_response.status_code == 200, create_response.text
+        session_id = create_response.json()["session_id"]
+        blocked_apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        store.session = generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text="Build a 2D browser fighting game with historical figures, playtesting, and release evidence.",
+                available_agents=[
+                    {
+                        "agent_id": "agent-1",
+                        "display_name": "Builder",
+                        "routing_skills": ["game", "testing"],
+                    }
+                ],
+                model_response=_auto_design_model_response("experience_design", "domain_grounding", "supporting_assets"),
+            ),
+            session_id=session_id,
+            created_at="2026-04-16T00:00:00+00:00",
+            updated_at="2026-04-16T00:00:00+00:00",
+        ).model_copy(update={
+            "planner_task_id": create_response.json()["planner_task_id"],
+            "planner_agent_id": "agent-1",
+        })
+        loaded_response = client.get(f"/v1/protocol-auto/sessions/{session_id}")
+        app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+            is_operator=True,
+            org_id="local",
+            roles=("operator", "author"),
+        )
+        author_apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+            is_operator=True,
+            org_id="local",
+            roles=("operator", "author", "publisher"),
+        )
+        apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
+        publish_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/publish")
+        run_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/run", json={"origin_channel": "registry"})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert create_response.status_code == 200
-    assert create_response.json()["analysis"]["domain"] == "requirement-specific"
+    assert create_response.json()["status"] == "planning"
+    assert create_response.json()["planner_task_id"].startswith("auto-design:")
+    assert create_response.json()["planner_policy"] == "auto_select"
+    assert create_response.json()["planner_request_id"] == ""
+    assert blocked_apply_response.status_code == 409
+    assert blocked_apply_response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_PLANNING"
+    assert loaded_response.status_code == 200
+    assert loaded_response.json()["status"] in {"ready", "blocked"}
+    assert loaded_response.json()["analysis"]["domain"] == "requirement-specific"
+    assert author_apply_response.status_code == 403
+    assert author_apply_response.json()["detail"]["error_code"] == "PROTOCOL_AUTO_APPLY_ROLE_REQUIRED"
     assert apply_response.status_code == 200
+    assert apply_response.json()["analysis"]["domain"] == "requirement-specific"
     assert apply_response.json()["target_protocol_id"] == "protocol-auto"
     assert publish_response.status_code == 200
     assert publish_response.json()["status"] == "published"
     assert run_response.status_code == 200
     assert run_response.json()["run_result"]["run"]["protocol_run_id"] == "run-auto"
+
+
+def test_protocol_auto_create_resource_attach_failure_returns_session_details(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.session = None
+            self.routed_task_id = ""
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            return [
+                AgentRecord(
+                    agent_id="agent-1",
+                    display_name="Builder",
+                    routing_skills=["testing"],
+                    supported_admin_operations=["design_auto_protocol"],
+                    connectivity_state="connected",
+                )
+            ]
+
+        def get_agent_status(self, agent_id: str):
+            return AgentRecord(
+                agent_id=agent_id,
+                display_name="Builder",
+                connectivity_state="connected",
+                supported_admin_operations=["design_auto_protocol"],
+            )
+
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
+
+        def list_routing_skills(self):
+            return []
+
+        def get_resource(self, resource_id: str):
+            assert resource_id == "resource-1"
+            return ResourceRecord(
+                resource_id="resource-1",
+                original_name="context.txt",
+                mime_type="text/plain",
+                size_bytes=42,
+                content_hash="abc123",
+                source_surface="registry",
+                metadata_json=RegistryJsonRecord.model_validate({"summary": "context"}),
+            )
+
+        def attach_resource(self, **kwargs):
+            raise KeyError(kwargs.get("resource_id"))
+
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                title="Auto Protocol planner",
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task_id = request.routed_task_id
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
+            )
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind == "planning_started"
+            self.session = session
+            return session
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a routed test protocol.",
+                "resource_refs": ["resource-1"],
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 404, response.text
+    detail = response.json()["detail"]
+    assert detail["error_code"] == "RESOURCE_NOT_FOUND"
+    assert detail["details"]["session_id"] == store.session.session_id
+    assert detail["details"]["planner_task_id"] == store.routed_task_id
+    assert detail["details"]["status"] == "planning"
+
+
+def test_protocol_auto_session_list_returns_pagination_without_queue_position(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    def _session(index: int):
+        stamp = f"2026-04-{16 + (index // 60):02d}T00:{index % 60:02d}:00+00:00"
+        return generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text=f"Build design {index}.",
+                available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+                model_response=ProtocolAutoDesignModelResponseRecord(
+                    requirement_summary=f"Build design {index}.",
+                    domain="test",
+                    work_packages=[
+                        ProtocolAutoDesignWorkPackageRecord(
+                            package_key="implementation",
+                            display_name="Implementation",
+                            rationale="Needed.",
+                            purpose="Build it.",
+                            quality_bar="Verified.",
+                            required_skills=["implementation"],
+                        )
+                    ],
+                ),
+            ),
+            session_id=f"auto-session-{index}",
+            created_at=stamp,
+            updated_at=stamp,
+        ).model_copy(update={
+            "status": "planning",
+            "planner_task_id": f"auto-design-{index}",
+            "planner_agent_id": "agent-1",
+            "planner_policy": "auto_select",
+            "planner_state": RegistryJsonRecord.model_validate({
+                "planner_status": "queued",
+                "queued_at": stamp,
+                "progress_summary": "Queued.",
+            }),
+        })
+
+    sessions = [_session(index) for index in range(1, 106)]
+
+    class _Store:
+        def list_protocol_auto_design_sessions(self, *, access, cursor=0, limit=25, status=""):
+            del access
+            filtered = [
+                item for item in sessions
+                if not str(status or "").strip() or item.status == str(status or "").strip()
+            ]
+            return filtered[int(cursor or 0): int(cursor or 0) + int(limit or 25)]
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2")
+        second_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=2")
+        deep_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=102")
+        final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=2&cursor=104")
+        hundred_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=100")
+        hundred_final_response = client.get("/v1/protocol-auto/sessions?status=planning&limit=100&cursor=100")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["next_cursor"] == 2
+    assert [item["session_id"] for item in payload["items"]] == ["auto-session-1", "auto-session-2"]
+    assert all("queue_position" not in item["planner_state"] for item in payload["items"])
+    assert second_response.status_code == 200, second_response.text
+    second_payload = second_response.json()
+    assert second_payload["next_cursor"] == 4
+    assert [item["session_id"] for item in second_payload["items"]] == ["auto-session-3", "auto-session-4"]
+    assert deep_response.status_code == 200, deep_response.text
+    deep_payload = deep_response.json()
+    assert deep_payload["next_cursor"] == 104
+    assert [item["session_id"] for item in deep_payload["items"]] == ["auto-session-103", "auto-session-104"]
+    assert all("queue_position" not in item["planner_state"] for item in deep_payload["items"])
+    assert final_response.status_code == 200, final_response.text
+    final_payload = final_response.json()
+    assert final_payload["next_cursor"] is None
+    assert [item["session_id"] for item in final_payload["items"]] == ["auto-session-105"]
+    assert hundred_response.status_code == 200, hundred_response.text
+    hundred_payload = hundred_response.json()
+    assert len(hundred_payload["items"]) == 100
+    assert hundred_payload["next_cursor"] == 100
+    assert hundred_final_response.status_code == 200, hundred_final_response.text
+    hundred_final_payload = hundred_final_response.json()
+    assert hundred_final_payload["next_cursor"] is None
+    assert [item["session_id"] for item in hundred_final_payload["items"]] == [
+        "auto-session-101",
+        "auto-session-102",
+        "auto-session-103",
+        "auto-session-104",
+        "auto-session-105",
+    ]
 
 
 def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkeypatch, tmp_path: Path):
@@ -2010,7 +2270,7 @@ def test_protocol_auto_run_existing_target_applies_and_publishes_revision(monkey
         ):
             assert protocol_id == "risk-protocol"
             assert expected_revision == 4
-            assert authoring_surface == "standard"
+            assert authoring_surface == "operator"
             self.calls.append("save_draft")
             return ProtocolMutationRecord(
                 ok=True,
@@ -2137,17 +2397,29 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 supported_admin_operations=["design_auto_protocol"],
             )
 
-        def create_management_request(self, request: ManagementRequest) -> ManagementRequest:
-            return request
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            return []
 
-        def get_management_result(self, request_id: str):
-            return ManagementResult(
-                request_id=request_id,
-                agent_id="agent-1",
-                success=True,
-                payload=DesignAutoProtocolResult(
-                    response=_auto_design_model_response("experience_design", "supporting_assets")
-                ),
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id="auto-conversation",
+                target_agent_id=str(kwargs.get("target_agent_id") or "agent-1"),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.routed_task = request
+            assert request.routed_task_id.startswith("auto-design:")
+            assert request.context.get("task_source_kind") == "auto_design"
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id="agent-1",
+                request=request.context,
             )
 
         def list_routing_skills(self):
@@ -2162,23 +2434,14 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 )
             ]
 
-        def create_protocol_auto_design_session(self, payload, *, access):
-            self.session = generate_auto_protocol_session(
-                payload,
-                session_id="auto-duplicate",
-                created_at="2026-04-16T00:00:00+00:00",
-                updated_at="2026-04-16T00:00:00+00:00",
-            )
-            return self.session
-
         def get_protocol_auto_design_session(self, session_id: str, *, access):
-            assert session_id == "auto-duplicate"
             if self.session is None:
                 raise KeyError(session_id)
+            assert session_id == self.session.session_id
             return self.session
 
         def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
-            assert event_kind == "applied"
+            assert event_kind in {"planning_started", "generated", "applied"}
             self.session = session
             return session
 
@@ -2225,12 +2488,35 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
                 "requirement_text": "Build a compact browser-runnable 2D historical platform fighter prototype.",
             },
         )
-        apply_response = client.post("/v1/protocol-auto/sessions/auto-duplicate/apply")
+        assert create_response.status_code == 200, create_response.text
+        session_id = create_response.json()["session_id"]
+        store.session = generate_auto_protocol_session(
+            ProtocolAutoDesignRequestRecord(
+                surface="registry",
+                requirement_text="Build a compact browser-runnable 2D historical platform fighter prototype.",
+                available_agents=[
+                    {
+                        "agent_id": "agent-1",
+                        "display_name": "Builder",
+                        "routing_skills": [],
+                    }
+                ],
+                model_response=_auto_design_model_response("experience_design", "supporting_assets"),
+            ),
+            session_id=session_id,
+            created_at="2026-04-16T00:00:00+00:00",
+            updated_at="2026-04-16T00:00:00+00:00",
+        ).model_copy(update={
+            "planner_task_id": create_response.json()["planner_task_id"],
+            "planner_agent_id": "agent-1",
+        })
+        apply_response = client.post(f"/v1/protocol-auto/sessions/{session_id}/apply")
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
 
     assert create_response.status_code == 200
+    assert create_response.json()["status"] == "planning"
     assert apply_response.status_code == 200
     assert store.saved_slugs == [
         "build-a-compact-browser-runnable-2d-historical-platform-fighter",
@@ -2240,6 +2526,118 @@ def test_protocol_auto_apply_uses_generated_copy_slug_on_duplicate(monkeypatch, 
     assert payload["target_protocol_id"] == "protocol-generated-copy"
     assert payload["draft_definition_json"]["metadata"]["slug"] == "build-a-compact-browser-runnable-2d-historical-platform-fighter-generated-2"
     assert payload["draft_definition_json"]["metadata"]["display_name"].endswith("(Generated 2)")
+
+
+def test_protocol_auto_planner_selection_skips_busy_agent_and_honors_preference(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+
+    class _Store:
+        def __init__(self):
+            self.sessions = {}
+            self.created_tasks: list[RoutedTaskRequest] = []
+
+        def list_agents(self, *, for_agent_id=None, cursor=0, limit=25, q="", connectivity_state="", include_soft_deleted=False):
+            assert connectivity_state == "connected"
+            return [
+                AgentRecord(
+                    agent_id=f"agent-{index}",
+                    display_name=f"M{index}",
+                    slug=f"m{index}",
+                    provider="codex",
+                    role="worker",
+                    routing_skills=["architecture", "testing"],
+                    supported_admin_operations=["design_auto_protocol"],
+                    connectivity_state="connected",
+                )
+                for index in (1, 2, 3)
+            ]
+
+        def get_agent_status(self, agent_id: str):
+            return next(agent for agent in self.list_agents(connectivity_state="connected") if agent.agent_id == agent_id)
+
+        def list_tasks(self, *, for_agent_id="", parent_conversation_id="", protocol_run_id="", cursor=0, limit=25, status="", completed_since_iso="", include_generated=False):
+            if for_agent_id == "agent-1" and status == "running":
+                return [
+                    TaskRecord(
+                        routed_task_id="auto-design:old:task",
+                        source_kind="auto_design",
+                        status="running",
+                        target_agent_id="agent-1",
+                        updated_at="2026-04-16T00:00:00+00:00",
+                    )
+                ]
+            return []
+
+        def create_conversation(self, **kwargs):
+            return ConversationRecord(
+                conversation_id=f"conversation-{len(self.created_tasks) + 1}",
+                target_agent_id=str(kwargs.get("target_agent_id") or ""),
+                source_kind=str(kwargs.get("source_kind") or "auto_design"),
+                hidden_from_default_views=bool(kwargs.get("hidden_from_default_views")),
+                title=str(kwargs.get("title") or "Auto Protocol planner"),
+            )
+
+        def create_routed_task(self, request: RoutedTaskRequest):
+            self.created_tasks.append(request)
+            return TaskRecord(
+                routed_task_id=request.routed_task_id,
+                source_kind="auto_design",
+                hidden_from_default_views=True,
+                status="queued",
+                target_agent_id=request.target_agent_id,
+                request=request.context,
+            )
+
+        def list_routing_skills(self):
+            return []
+
+        def get_protocol_auto_design_session(self, session_id: str, *, access):
+            try:
+                return self.sessions[session_id]
+            except KeyError as exc:
+                raise KeyError(session_id) from exc
+
+        def update_protocol_auto_design_session(self, session, *, access, event_kind: str = "updated"):
+            assert event_kind == "planning_started"
+            self.sessions[session.session_id] = session
+            return session
+
+    store = _Store()
+    app.dependency_overrides[registry_server.get_store] = lambda: store
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator", "author", "publisher"),
+    )
+    try:
+        auto_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build a serious browser app.",
+            },
+        )
+        preferred_response = client.post(
+            "/v1/protocol-auto/sessions",
+            json={
+                "surface": "registry",
+                "requirement_text": "Build another serious browser app.",
+                "preferred_design_agent_id": "agent-3",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert auto_response.status_code == 200, auto_response.text
+    assert auto_response.json()["planner_agent_id"] == "agent-2"
+    assert auto_response.json()["planner_policy"] == "auto_select"
+    assert store.created_tasks[0].target_agent_id == "agent-2"
+    assert preferred_response.status_code == 200, preferred_response.text
+    assert preferred_response.json()["planner_agent_id"] == "agent-3"
+    assert preferred_response.json()["planner_policy"] == "specific_agent"
+    assert store.created_tasks[1].target_agent_id == "agent-3"
 
 
 def test_protocol_auto_publish_blocks_unresolved_assignments(monkeypatch, tmp_path: Path):
@@ -3371,6 +3769,42 @@ def test_protocol_stage_result_broadcasts_protocol_run_invalidation(monkeypatch,
     assert response.status_code == 200
     assert captured
     assert {"tasks", "conversations", "summary", "protocols", "protocol-run:run-1"} in captured
+
+
+def test_auto_design_progress_status_broadcasts_session_only(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    captured: list[set[str]] = []
+
+    class _Authority:
+        def update_routed_task_for_agent(self, agent_token: str, payload):
+            assert agent_token == "agent-token"
+            assert payload["routed_task_id"] == "auto-design:session-1:task"
+            return TaskRecord(
+                routed_task_id="auto-design:session-1:task",
+                target_agent_id="agent-1",
+                status="running",
+                summary="planner running",
+            )
+
+    async def _capture_invalidations(*, topics, reason, conversation_id="", agent_id="", routed_task_id=""):
+        assert reason == "routed_task.updated"
+        captured.append(set(topics))
+
+    monkeypatch.setattr(registry_server, "_broadcast_invalidations", _capture_invalidations)
+    app.dependency_overrides[registry_server.get_authority] = lambda: _Authority()
+    try:
+        response = client.post(
+            "/v1/agents/routed-tasks/auto-design:session-1:task/status",
+            headers={"Authorization": "Bearer agent-token"},
+            json={"status": "running", "summary": "planner running", "progress": 8},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_authority, None)
+
+    assert response.status_code == 200
+    assert captured == [{"tasks", "protocol-auto-session:session-1"}]
+    assert "protocols" not in captured[0]
 
 
 def test_protocol_issues_route_returns_issue_rows(monkeypatch, tmp_path: Path):
@@ -5452,6 +5886,7 @@ def test_protocol_artifact_content_route_opens_directory_index_and_downloads_zip
 def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "offline-package"
     package_dir.mkdir()
     (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
@@ -5504,9 +5939,538 @@ def test_protocol_artifact_runtime_status_detects_static_package(monkeypatch, tm
     assert payload["package_url"].endswith("/v1/protocol-runs/run-1/artifacts/package/content?download=1")
 
 
+def test_protocol_artifact_runtime_rejects_full_agent_token_and_accepts_scoped_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    package_dir = tmp_path / "scoped-package"
+    package_dir.mkdir()
+    (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert protocol_run_id == "run-1"
+            assert artifact_key == "package"
+            assert action == "runtime:read"
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="builder",
+                allowed_actions=["runtime:read"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="scoped-package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del run_id, artifact_key, access
+            return None
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        rejected = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime",
+            headers={"Authorization": "Bearer full-agent-token"},
+        )
+        accepted = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert rejected.status_code == 403
+    assert rejected.json()["detail"]["error_code"] == "RUNTIME_CAPABILITY_FORBIDDEN"
+    assert accepted.status_code == 200
+    assert accepted.json()["runtime"]["status"] == "stopped"
+
+
+def test_protocol_artifact_runtime_journey_spec_and_result_use_scoped_bearer(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-spec",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 1,
+                    "primary_artifact_key": "package",
+                    "required_journeys": [
+                        {
+                            "journey_key": "primary_happy_path",
+                            "required_hooks": ["primary_action", "primary_result"],
+                            "steps": [{"action": "click", "hook": "primary_action"}],
+                            "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                        }
+                    ],
+                },
+            },
+        },
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "artifacts": [{"artifact_key": "package", "kind": "workspace_file", "path": "package"}],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    manifest = ProtocolArtifactRuntimeManifestRecord(
+        runtime_kind="static",
+        ui_path="/",
+        health_path="/health",
+        test_hooks=[
+            {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+            {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+        ],
+    )
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=manifest,
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+    events: list[ProtocolArtifactRuntimeEventRecord] = [
+        ProtocolArtifactRuntimeEventRecord(
+            runtime_instance_id=runtime.runtime_instance_id,
+            protocol_run_id="run-1",
+            artifact_key="package",
+            event_kind="journey_requested",
+            actor_ref="operator-session",
+            summary="Journey requested.",
+            metadata_json=RegistryJsonRecord.model_validate({
+                "journey_key": "primary_happy_path",
+                "journey_run_id": "journey-1",
+                "source": "operator_journey_run",
+            }),
+        )
+    ]
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert protocol_run_id == "run-1"
+            assert artifact_key == "package"
+            assert action in {"journey:read", "journey:result"}
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="reviewer",
+                allowed_actions=["journey:read", "journey:result"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[ProtocolArtifactRecord(protocol_artifact_id="artifact-1", protocol_run_id="run-1", artifact_key="package", artifact_kind="workspace_file", location=str(tmp_path), exists=True)],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            return runtime
+
+        def list_protocol_artifact_runtime_events(
+            self,
+            run_id: str,
+            artifact_key: str,
+            *,
+            access,
+            limit: int = 50,
+            event_kind: str | None = None,
+        ):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            matching = [item for item in events if not event_kind or item.event_kind == event_kind]
+            return list(matching[:limit])
+
+        def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
+            assert access.has_role("runtime_capability")
+            events.append(event)
+            return event
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        spec_response = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+        result_response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/results",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={
+                "journey_run_id": "journey-1",
+                "ok": True,
+                "status": "passed",
+                "summary": "Visible result updated.",
+                "assertions": [{"action": "assert_visible", "hook": "primary_result", "ok": True}],
+            },
+        )
+        forged_response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/results",
+            headers={"Authorization": "Bearer scoped-token"},
+            json={
+                "journey_run_id": "not-requested",
+                "ok": True,
+                "status": "passed",
+                "summary": "Forged pass.",
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert spec_response.status_code == 200
+    spec = spec_response.json()["spec"]
+    assert spec["journey_key"] == "primary_happy_path"
+    assert sorted(spec["hooks"]) == ["primary_action", "primary_result"]
+    assert result_response.status_code == 200
+    assert result_response.json()["event"]["event_kind"] == "journey_completed"
+    assert forged_response.status_code == 409
+    assert forged_response.json()["detail"]["error_code"] == "PROTOCOL_RUNTIME_JOURNEY_NOT_REQUESTED"
+    result_event = events[-1]
+    assert result_event.metadata_json.as_dict()["source"] == "registry_journey_runner"
+    assert result_event.metadata_json.as_dict()["actor_stage_execution_id"] == "stage-1"
+
+
+def test_protocol_artifact_runtime_journey_spec_reads_v2_contract_snapshot(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    contract_path = tmp_path / "auto_protocol_contract.json"
+    contract_path.write_text(
+        json.dumps({
+            "product_contract": {"workflows": ["run scenario"]},
+            "domain_contract": {"caveats": ["educational"]},
+            "system_contract": {"api_surface": []},
+            "verification_contract": {
+                "required_journeys": [
+                    {
+                        "journey_key": "contract_happy_path",
+                        "required_hooks": ["primary_action", "primary_result"],
+                        "steps": [{"action": "click", "hook": "primary_action"}],
+                        "assertions": [{"action": "assert_visible", "hook": "primary_result"}],
+                    }
+                ]
+            },
+        }),
+        encoding="utf-8",
+    )
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-spec-v2",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 2,
+                    "contract_required": True,
+                    "primary_artifact_key": "package",
+                    "contract_artifact_key": "auto_protocol_contract",
+                },
+            },
+        },
+        "participants": [{"participant_key": "worker", "display_name": "Worker"}],
+        "artifacts": [
+            {"artifact_key": "package", "kind": "workspace_file", "path": "package"},
+            {"artifact_key": "auto_protocol_contract", "kind": "workspace_file", "path": "auto_protocol_contract.json"},
+        ],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "worker",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey-v2",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="static",
+            ui_path="/",
+            health_path="/health",
+            test_hooks=[
+                {"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"},
+                {"hook": "primary_result", "selector": "[data-testid='primary-result']", "kind": "region"},
+            ],
+        ),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+
+    class _Store:
+        def validate_runtime_capability_token(self, *, bearer_token: str, protocol_run_id: str, artifact_key: str, action: str):
+            if bearer_token != "scoped-token":
+                return None
+            assert action == "journey:read"
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                protocol_run_id=protocol_run_id,
+                protocol_stage_execution_id="stage-1",
+                artifact_key=artifact_key,
+                participant_key="reviewer",
+                allowed_actions=["journey:read"],
+            )
+
+        def get_protocol_run(self, run_id: str, *, access):
+            assert run_id == "run-1"
+            assert access.has_role("runtime_capability")
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(tmp_path),
+                        exists=True,
+                    ),
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-contract",
+                        protocol_run_id="run-1",
+                        artifact_key="auto_protocol_contract",
+                        artifact_kind="workspace_file",
+                        location=str(contract_path),
+                        exists=True,
+                    ),
+                ],
+                artifact_snapshots=[
+                    ProtocolArtifactSnapshotRecord(
+                        artifact_snapshot_id="snapshot-contract",
+                        protocol_artifact_id="artifact-contract",
+                        protocol_run_id="run-1",
+                        artifact_key="auto_protocol_contract",
+                        snapshot_kind="file",
+                        storage_uri=str(contract_path),
+                        content_hash="contract-hash",
+                        size_bytes=contract_path.stat().st_size,
+                        produced_by_stage_execution_id="stage-contract",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            assert access.has_role("runtime_capability")
+            return runtime
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        response = client.get(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/contract_happy_path",
+            headers={"Authorization": "Bearer scoped-token"},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert response.status_code == 200
+    spec = response.json()["spec"]
+    assert spec["journey_key"] == "contract_happy_path"
+    assert [item["hook"] for item in spec["steps"]] == ["primary_action"]
+    assert sorted(spec["hooks"]) == ["primary_action", "primary_result"]
+
+
+def test_protocol_artifact_runtime_journey_run_queues_management_request(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    csrf = _ui_csrf_token(client)
+    document = {
+        "schema_version": 1,
+        "metadata": {
+            "slug": "journey-run",
+            "auto_protocol": {
+                "primary_artifact_key": "package",
+                "acceptance_contract": {
+                    "schema_version": 1,
+                    "primary_artifact_key": "package",
+                    "required_journeys": [
+                        {
+                            "journey_key": "primary_happy_path",
+                            "required_hooks": ["primary_action"],
+                            "steps": [{"action": "click", "hook": "primary_action"}],
+                        }
+                    ],
+                },
+            },
+        },
+        "participants": [{"participant_key": "reviewer", "display_name": "Reviewer"}],
+        "artifacts": [{"artifact_key": "package", "kind": "workspace_file", "path": "package"}],
+        "stages": [
+            {
+                "stage_key": "final",
+                "participant_key": "reviewer",
+                "selector": {"kind": "skill", "value": "review"},
+                "stage_kind": "acceptance",
+                "transitions": {"accept": "__complete__", "revise": "__failed__", "fail": "__failed__"},
+                "instructions": "Review.",
+            }
+        ],
+    }
+    runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-journey-run",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="running",
+        manifest=ProtocolArtifactRuntimeManifestRecord(
+            runtime_kind="static",
+            ui_path="/",
+            health_path="/health",
+            test_hooks=[{"hook": "primary_action", "selector": "[data-testid='primary-action']", "kind": "button"}],
+        ),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+    )
+    events: list[ProtocolArtifactRuntimeEventRecord] = []
+    requests: list[ManagementRequest] = []
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(
+                    protocol_run_id="run-1",
+                    protocol_id="protocol-1",
+                    entry_agent_id="agent-1",
+                    current_stage_execution_id="stage-1",
+                ),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(
+                    protocol_definition_version_id="ver-1",
+                    protocol_id="protocol-1",
+                    definition_json=RegistryJsonRecord.model_validate(document),
+                ),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(tmp_path),
+                        exists=True,
+                        content_hash="package-hash",
+                    )
+                ],
+                stage_executions=[
+                    ProtocolStageExecutionRecord(
+                        protocol_stage_execution_id="stage-1",
+                        protocol_run_id="run-1",
+                        stage_key="final",
+                        participant_key="reviewer",
+                        status="blocked",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return runtime
+
+        def mint_runtime_capability_token(self, **kwargs):
+            assert kwargs["allowed_actions"] == ["runtime:read", "runtime:fetch", "journey:read", "journey:result", "journey:run"]
+            return ProtocolRuntimeCapabilityTokenRecord(
+                capability_token_id="cap-1",
+                capability_ref="oct-cap-ref",
+                protocol_run_id="run-1",
+                protocol_stage_execution_id="stage-1",
+                artifact_key="package",
+                participant_key="reviewer",
+                target_agent_id="agent-1",
+                allowed_actions=list(kwargs["allowed_actions"]),
+            )
+
+        def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
+            del access
+            events.append(event)
+            return event
+
+        def create_management_request(self, request: ManagementRequest):
+            requests.append(request)
+            return request
+
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    try:
+        response = client.post(
+            "/v1/protocol-runs/run-1/artifacts/package/runtime/journeys/primary_happy_path/run",
+            headers={"X-CSRF-Token": csrf},
+        )
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "queued"
+    assert payload["journey_run_id"]
+    assert len(events) == 1
+    assert events[0].event_kind == "journey_requested"
+    assert events[0].metadata_json.as_dict()["artifact_content_hash"] == "package-hash"
+    assert len(requests) == 1
+    assert requests[0].payload.operation == "run_artifact_journey"
+    assert requests[0].payload.journey_run_id == payload["journey_run_id"]
+
+
 def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_field(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     (package_dir / "index.html").write_text("<!doctype html><title>App</title>", encoding="utf-8")
@@ -5601,9 +6565,141 @@ def test_protocol_artifact_runtime_status_surfaces_health_without_extra_model_fi
     assert saved_runtime.updated_at == "2026-05-06T04:00:00Z"
 
 
+def test_protocol_artifact_runtime_get_reconcile_preserves_registry_urls_and_dedupes_health(monkeypatch, tmp_path: Path):
+    _configure_registry(monkeypatch, tmp_path)
+    client = TestClient(app)
+    _login_ui(client)
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/health")
+    existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
+        runtime_instance_id="runtime-1",
+        protocol_run_id="run-1",
+        artifact_key="package",
+        agent_id="agent-1",
+        status="starting",
+        manifest=manifest,
+        manifest_path=str(package_dir / "octopus-runtime.json"),
+        artifact_path=str(package_dir),
+        runtime_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        ui_url="/runtime/protocol-runs/run-1/artifacts/package/app/",
+        api_url="/runtime/protocol-runs/run-1/artifacts/package/api/",
+        health_url="/v1/protocol-runs/run-1/artifacts/package/runtime/health",
+    )
+    saved_runtime = existing_runtime
+    events: list[ProtocolArtifactRuntimeEventRecord] = []
+
+    class _Store:
+        def get_protocol_run(self, run_id: str, *, access):
+            del access
+            assert run_id == "run-1"
+            return ProtocolRunDetailRecord(
+                run=ProtocolRunRecord(protocol_run_id="run-1", protocol_id="protocol-1", entry_agent_id="agent-1"),
+                definition=ProtocolDefinitionRecord(protocol_id="protocol-1", slug="demo"),
+                version=ProtocolDefinitionVersionRecord(protocol_definition_version_id="ver-1", protocol_id="protocol-1"),
+                artifacts=[
+                    ProtocolArtifactRecord(
+                        protocol_artifact_id="artifact-1",
+                        protocol_run_id="run-1",
+                        artifact_key="package",
+                        artifact_kind="workspace_file",
+                        location=str(package_dir),
+                        workspace_path="package",
+                        exists=True,
+                        produced_by_stage_execution_id="stage-1",
+                    )
+                ],
+            )
+
+        def get_protocol_artifact_runtime(self, run_id: str, artifact_key: str, *, access):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            return saved_runtime
+
+        def save_protocol_artifact_runtime(self, runtime: ProtocolArtifactRuntimeInstanceRecord, *, access):
+            del access
+            nonlocal saved_runtime
+            saved_runtime = runtime
+            return runtime
+
+        def list_protocol_artifact_runtime_events(
+            self,
+            run_id: str,
+            artifact_key: str,
+            *,
+            access,
+            limit: int = 50,
+            event_kind: str | None = None,
+        ):
+            del access
+            assert run_id == "run-1"
+            assert artifact_key == "package"
+            matching = [item for item in events if not event_kind or item.event_kind == event_kind]
+            return list(matching[:limit])
+
+        def append_protocol_artifact_runtime_event(self, event: ProtocolArtifactRuntimeEventRecord, *, access):
+            del access
+            events.insert(0, event)
+            return event
+
+    from octopus_registry.management_client import RegistryManagementClient
+
+    async def _send(self, *, agent_id: str, payload, timeout_seconds: int = 30):
+        del self, timeout_seconds
+        assert agent_id == "agent-1"
+        assert payload.operation == "artifact_runtime_health"
+        refreshed_runtime = saved_runtime.model_copy(
+            update={
+                "status": "starting",
+                "health_url": "/runtime/protocol-runs/run-1/artifacts/package/health",
+                "runtime_url": "http://127.0.0.1:12345/",
+                "updated_at": "2026-05-06T04:00:00Z",
+            }
+        )
+        return ManagementResult(
+            request_id="mgmt-1",
+            agent_id="agent-1",
+            success=True,
+            payload=ArtifactRuntimeHealthResult(
+                health=ProtocolArtifactRuntimeHealthRecord(
+                    ok=True,
+                    status="running",
+                    status_code=200,
+                    message="OK",
+                    runtime=refreshed_runtime,
+                )
+            ),
+        )
+
+    monkeypatch.setattr(RegistryManagementClient, "send", _send)
+    app.dependency_overrides[registry_server.get_store] = lambda: _Store()
+    app.dependency_overrides[registry_server.require_authenticated] = lambda: registry_auth.AuthContext(
+        is_operator=True,
+        org_id="local",
+        roles=("operator",),
+    )
+    try:
+        first = client.get("/v1/protocol-runs/run-1/artifacts/package/runtime")
+        second = client.get("/v1/protocol-runs/run-1/artifacts/package/runtime")
+    finally:
+        app.dependency_overrides.pop(registry_server.get_store, None)
+        app.dependency_overrides.pop(registry_server.require_authenticated, None)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    payload = second.json()
+    assert payload["runtime"]["status"] == "running"
+    assert payload["runtime"]["health_url"] == "/v1/protocol-runs/run-1/artifacts/package/runtime/health"
+    assert payload["runtime"]["runtime_url"] == "/runtime/protocol-runs/run-1/artifacts/package/app/"
+    assert [event.event_kind for event in events] == ["health_checked"]
+    assert events[0].metadata_json.as_dict() == {"ok": True, "status": "running", "status_code": 200}
+
+
 def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     package_dir = tmp_path / "package"
     package_dir.mkdir()
     (package_dir / "octopus-runtime.json").write_text(
@@ -5668,8 +6764,9 @@ def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypat
         org_id="local",
         roles=("operator",),
     )
+    csrf = _ui_csrf_token(client)
     try:
-        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/start")
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/start", headers={"X-CSRF-Token": csrf})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)
@@ -5684,6 +6781,7 @@ def test_protocol_artifact_runtime_start_blocks_non_run_ready_manifest(monkeypat
 def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tmp_path: Path):
     _configure_registry(monkeypatch, tmp_path)
     client = TestClient(app)
+    _login_ui(client)
     manifest = ProtocolArtifactRuntimeManifestRecord(runtime_kind="static", ui_path="/", health_path="/")
     existing_runtime = ProtocolArtifactRuntimeInstanceRecord(
         runtime_instance_id="runtime-1",
@@ -5753,8 +6851,9 @@ def test_protocol_artifact_runtime_stop_preserves_typed_manifest(monkeypatch, tm
         org_id="local",
         roles=("operator",),
     )
+    csrf = _ui_csrf_token(client)
     try:
-        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop")
+        response = client.post("/v1/protocol-runs/run-1/artifacts/package/runtime/stop", headers={"X-CSRF-Token": csrf})
     finally:
         app.dependency_overrides.pop(registry_server.get_store, None)
         app.dependency_overrides.pop(registry_server.require_authenticated, None)

@@ -1131,6 +1131,39 @@ class RegistryClient(
         )
         return TaskRecord.model_validate(response)
 
+    async def exchange_runtime_capability(
+        self,
+        capability_ref: str,
+    ) -> dict:
+        return await self._request(
+            "POST",
+            "/v1/agents/runtime-capabilities/exchange",
+            json={"capability_ref": str(capability_ref or "")},
+        )
+
+    async def protocol_runtime_journey_result(
+        self,
+        *,
+        run_id: str,
+        artifact_key: str,
+        journey_key: str,
+        bearer_token: str,
+        result: object,
+    ) -> dict:
+        if hasattr(result, "model_dump"):
+            payload = result.model_dump(mode="json")
+        elif isinstance(result, Mapping):
+            payload = dict(result)
+        else:
+            payload = {}
+        return await self._request(
+            "POST",
+            f"/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}/results",
+            require_auth=False,
+            extra_headers={"Authorization": f"Bearer {bearer_token}"},
+            json=payload,
+        )
+
     async def management_result(
         self,
         request_id: str,

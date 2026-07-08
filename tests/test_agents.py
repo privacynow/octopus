@@ -35,10 +35,7 @@ from octopus_sdk.identity import (
 from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry.client import RegistryClientError
 from octopus_sdk.registry.management import DesignAutoProtocolRequest, ManagementRequest
-from octopus_sdk.protocols.auto_design import (
-    ProtocolAutoDesignModelRequestRecord,
-    ProtocolAutoDesignModelResponseRecord,
-)
+from octopus_sdk.protocols.auto_design import ProtocolAutoDesignModelRequestRecord
 from octopus_sdk.inbound_types import deserialize_inbound
 from octopus_sdk.transport import (
     DelegationContinuationResult,
@@ -1733,16 +1730,12 @@ async def test_handle_registry_channel_action_and_control_dispatch(tmp_path: Pat
         )
 
 
-async def test_handle_registry_auto_protocol_management_uses_runtime_provider(monkeypatch):
+async def test_handle_registry_auto_protocol_management_requires_routed_task(monkeypatch):
     seen: dict[str, object] = {}
 
     async def fake_design(request, *, config, provider, provider_state_factory):
-        del request, config, provider_state_factory
-        seen["provider"] = provider
-        return ProtocolAutoDesignModelResponseRecord(
-            requirement_summary="Build a small browser artifact.",
-            planner_ref="test-planner",
-        )
+        del request, config, provider, provider_state_factory
+        raise AssertionError("management-channel Auto Protocol design should not invoke the provider")
 
     class _FakeRegistryClient:
         def __init__(self, base_url: str, *, agent_token: str = "", **kwargs):
@@ -1809,10 +1802,10 @@ async def test_handle_registry_auto_protocol_management_uses_runtime_provider(mo
         )
 
     assert outcome == "accepted"
-    assert seen["provider"] is provider
     assert seen["agent_token"] == "agent-token"
     result = seen["result"]
-    assert result.success is True
+    assert result.success is False
+    assert result.error_code == "auto_design_requires_routed_task"
 
 
 async def test_handle_registry_channel_action_preserves_already_qualified_future_surface_ref(tmp_path: Path):

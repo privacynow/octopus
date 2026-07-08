@@ -28,7 +28,7 @@ from .models import (
 
 ProtocolAutoDesignMode = Literal["create", "revise"]
 ProtocolAutoDesignSurface = Literal["registry", "telegram", "api"]
-ProtocolAutoDesignStatus = Literal["draft", "ready", "blocked", "applied", "published", "running", "failed"]
+ProtocolAutoDesignStatus = Literal["draft", "planning", "ready", "blocked", "applied", "published", "running", "failed"]
 ProtocolAutoDesignSeverity = Literal["info", "warning", "error"]
 
 _AUTO_STAGE_BUDGET_SMALL_MAX = 7
@@ -82,12 +82,92 @@ _AUTO_RUNTIME_PHRASES = (
     "web application",
     "web browser",
 )
+_AUTO_CONTRACT_ARTIFACT_KEY = "auto_protocol_contract"
+_AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY = "product_domain_contract"
+_AUTO_CONTRACT_REVIEW_ARTIFACT_KEY = "auto_protocol_contract_review"
+_AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY = "product_domain_contract_review"
+_AUTO_SERIOUS_PRODUCT_TERMS = {
+    "account",
+    "accounts",
+    "api",
+    "app",
+    "application",
+    "audit",
+    "auth",
+    "backend",
+    "backtest",
+    "backtesting",
+    "broker",
+    "callout",
+    "dashboard",
+    "data integration",
+    "database",
+    "db",
+    "finance",
+    "healthcare",
+    "integration",
+    "irreversible",
+    "ledger",
+    "legal",
+    "live",
+    "order",
+    "orders",
+    "payment",
+    "payments",
+    "persistent",
+    "provider",
+    "recommendation",
+    "recommendations",
+    "secret",
+    "secrets",
+    "service",
+    "state",
+    "trading",
+    "workflow",
+}
+_AUTO_SERIOUS_PRODUCT_CLASSES = {
+    "api_service",
+    "backend_system",
+    "data_integration",
+    "dashboard",
+    "external_integration",
+    "finance_tool",
+    "healthcare_tool",
+    "legal_tool",
+    "persistent_state_system",
+    "serious_product",
+    "trading_tool",
+    "workflow_engine",
+}
+_AUTO_V2_REQUIRED_EVIDENCE_KINDS = (
+    "runtime_start",
+    "runtime_health",
+    "artifact_snapshot",
+    "browser_journey",
+    "api_probe",
+    "api_contract",
+    "domain_invariant",
+    "db_invariant",
+    "persistence_invariant",
+    "provider_mock",
+    "provider_live_status",
+    "state_machine",
+    "security_gate",
+    "negative_case",
+    "regression_seed",
+    "documentation_claim",
+    "operator_decision",
+    "domain_source",
+)
 
 AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE = (
     "Runtime manifest contract: runnable primary artifacts must place octopus-runtime.json at the artifact package root "
     "and it must validate as ProtocolArtifactRuntimeManifestRecord. Use runtime_kind exactly one of static, node, python, "
     "java, binary, or process. For a Java service use runtime_kind 'java', not a descriptive phrase. For process-backed "
     "runtimes include start_command, ui_path, health_path, api_base_path, smoke_test steps, and endpoints as an array of objects. "
+    "Runnable primary artifacts must also include test_hooks in octopus-runtime.json. test_hooks maps stable hook ids to deterministic "
+    "locators, preferably data-testid selectors, with hook, selector, kind, and optional description. At minimum expose primary_action "
+    "for a representative user action and primary_result for the visible result area. "
     "The package must be built and smoke-tested before final acceptance; start_command is only for launching the already prepared "
     "runtime and must not run dependency installation, build, test, package, or developer server commands at launch. "
     "Each endpoint object uses label, path, endpoint_kind, method, and description; endpoint_kind must be one of ui, api, health, "
@@ -572,6 +652,8 @@ class ProtocolAutoDesignPlanRecord(RegistryRecordModel):
     protocol_name: str = ""
     protocol_slug: str = ""
     description: str = ""
+    product_class: str = ""
+    contract_required: bool = False
     roles: list[ProtocolAutoDesignRolePlanRecord] = Field(default_factory=list)
     artifacts: list[ProtocolAutoDesignArtifactPlanRecord] = Field(default_factory=list)
     stages: list[ProtocolAutoDesignStagePlanRecord] = Field(default_factory=list)
@@ -591,8 +673,10 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    resource_summaries: list[RegistryJsonRecord] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
 
-    @field_validator("available_agents", "available_skills", mode="before")
+    @field_validator("available_agents", "available_skills", "resource_summaries", mode="before")
     @classmethod
     def _json_list(cls, value: object) -> list[RegistryJsonRecord]:
         return [RegistryJsonRecord.model_validate(_dict(item)) for item in _list(value)]
@@ -601,6 +685,8 @@ class ProtocolAutoDesignModelRequestRecord(RegistryRecordModel):
 class ProtocolAutoDesignModelResponseRecord(RegistryRecordModel):
     requirement_summary: str = ""
     domain: str = "requirement-specific"
+    product_class: str = ""
+    contract_skeleton: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     risk_assessment: str = ""
     assumptions: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
@@ -658,6 +744,19 @@ class ProtocolAutoDesignChangeSummaryRecord(RegistryRecordModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class ProtocolRunLessonRecord(RegistryRecordModel):
+    category: str = ""
+    summary: str = ""
+    source_ref: str = ""
+    lesson_type: str = ""
+    applies_when: str = ""
+    contract_section: str = ""
+    requirement_id: str = ""
+    required_evidence: list[str] = Field(default_factory=list)
+    source_run_id: str = ""
+    source_failure: str = ""
+
+
 class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     mode: ProtocolAutoDesignMode = "create"
     surface: ProtocolAutoDesignSurface = "api"
@@ -666,6 +765,7 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     target_protocol_id: str = ""
     target_version_id: str = ""
     target_draft_revision: int = 0
+    source_run_id: str = ""
     source_document: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     available_agents: list[RegistryJsonRecord] = Field(default_factory=list)
     available_skills: list[RegistryJsonRecord] = Field(default_factory=list)
@@ -674,10 +774,12 @@ class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
     actor_ref: str = ""
     chat_ref: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    resource_summaries: list[RegistryJsonRecord] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
     idempotency_key: str = ""
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
 
-    @field_validator("available_agents", "available_skills", mode="before")
+    @field_validator("available_agents", "available_skills", "resource_summaries", mode="before")
     @classmethod
     def _json_list(cls, value: object) -> list[RegistryJsonRecord]:
         return [RegistryJsonRecord.model_validate(_dict(item)) for item in _list(value)]
@@ -693,11 +795,20 @@ class ProtocolAutoDesignSessionRecord(RegistryRecordModel):
     source_protocol_id: str = ""
     source_version_id: str = ""
     source_draft_revision: int = 0
+    source_run_id: str = ""
     target_protocol_id: str = ""
     target_draft_revision: int = 0
     requirement_text: str = ""
     constraints_text: str = ""
     resource_refs: list[str] = Field(default_factory=list)
+    run_lessons: list[ProtocolRunLessonRecord] = Field(default_factory=list)
+    planner_request_id: str = ""
+    planner_task_id: str = ""
+    planner_policy: str = "auto_select"
+    planner_agent_id: str = ""
+    planner_state: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    prompt_diagnostics: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    source_document_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord, exclude=True)
     model_response: ProtocolAutoDesignModelResponseRecord | None = None
     analysis: ProtocolAutoDesignAnalysisRecord = Field(default_factory=ProtocolAutoDesignAnalysisRecord)
     plan: ProtocolAutoDesignPlanRecord = Field(default_factory=ProtocolAutoDesignPlanRecord)
@@ -1568,6 +1679,208 @@ def _consolidate_work_packages(
     return [requirements, *kept, consolidated, implementation]
 
 
+def _contract_required_for_auto_protocol(
+    *,
+    requirement_text: str,
+    constraints_text: str,
+    runtime_expected: bool,
+    analysis: ProtocolAutoDesignAnalysisRecord,
+    model_response: ProtocolAutoDesignModelResponseRecord | None,
+) -> tuple[bool, str]:
+    skeleton = (
+        model_response.contract_skeleton.as_dict()
+        if model_response is not None and isinstance(model_response.contract_skeleton, RegistryJsonRecord)
+        else {}
+    )
+    declared_required = skeleton.get("contract_required")
+    product_class = _snake(str((model_response.product_class if model_response is not None else "") or ""))
+    if not product_class:
+        product_class = _snake(str((skeleton.get("product_class") if isinstance(skeleton, Mapping) else "") or ""))
+    haystack = _normalized_words(
+        requirement_text,
+        constraints_text,
+        analysis.domain,
+        analysis.goal,
+        analysis.focus,
+        *(analysis.deliverables or []),
+        *((model_response.risk_assessment if model_response is not None else "") or "",),
+    )
+    term_hit = _has_any(haystack, tuple(_AUTO_SERIOUS_PRODUCT_TERMS))
+    class_hit = product_class in _AUTO_SERIOUS_PRODUCT_CLASSES
+    required = bool(runtime_expected or class_hit or term_hit or declared_required is True)
+    if not product_class:
+        if "trading" in haystack or "broker" in haystack or "order" in haystack:
+            product_class = "trading_tool"
+        elif "api" in haystack or "backend" in haystack or "service" in haystack:
+            product_class = "api_service"
+        elif "provider" in haystack or "integration" in haystack or "callout" in haystack:
+            product_class = "external_integration"
+        elif "database" in haystack or "ledger" in haystack or "persistent" in haystack or "state" in haystack:
+            product_class = "persistent_state_system"
+        elif runtime_expected:
+            product_class = "serious_product"
+        else:
+            product_class = "lightweight_artifact"
+    if product_class == "lightweight_artifact" and required:
+        product_class = "serious_product"
+    return required, product_class
+
+
+def _contract_stage_packages(
+    *,
+    requirement_text: str,
+    terms_text: str,
+    product_class: str,
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    requirement = _sentence(requirement_text) or "Create the requested outcome."
+    product_domain = _work_package(
+        "product_domain_contract",
+        "Product and Domain Contract",
+        "product_domain_contract_owner",
+        "Product and Domain Contract Owner",
+        (
+            "Produce the first half of the authoritative Auto Protocol contract: product goals, target users, core workflows, "
+            "domain expertise, safety caveats, operator decision points, and non-goals."
+        ),
+        (
+            f"Create product_domain_contract as structured JSON for: {requirement} "
+            "It must include product_contract and domain_contract sections. product_contract must cover users, workflows, success criteria, unsafe actions, visible outcomes, and non_goals. "
+            "domain_contract must cover domain terms, expert assumptions, required sources, caveats, operator_decisions_required, do_not_claim boundaries, invariants, unsafe actions, external data/provider assumptions, persistence/state rules, adversarial negative cases, and inherited lessons. "
+            f"Preserve requirement terms: {terms_text}. Product class: {product_class}."
+        ),
+        (
+            "The JSON is concrete enough that implementation and verification stages do not have to invent product, domain, safety, or operator-decision standards."
+        ),
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+        "Product and Domain Contract",
+        "Structured JSON containing product_contract and domain_contract sections for the run.",
+        artifact_path=_auto_artifact_path("product-domain-contract", extension=".json"),
+        review_role_key="product_domain_contract_reviewer",
+        review_display_name="Product and Domain Contract Reviewer",
+        review_artifact_key=_AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY,
+        review_artifact_display_name="Product and Domain Contract Review",
+        review_artifact_description="Adversarial review of product/domain contract depth, operator decisions, domain risk, and unsupported claims.",
+        review_artifact_path=_auto_artifact_path("product-domain-contract-review"),
+        review_rubric=(
+            "Review product, domain, safety, and operator-decision coverage. Choose revise if workflows, unsafe actions, domain expertise, sources, caveats, non-goals, or user decisions are shallow, unsupported, or missing."
+        ),
+        rationale="Serious product runs need explicit product and domain standards before system design or implementation.",
+        required_skills=("product analysis", "domain grounding", "risk review"),
+    )
+    system_verification = _work_package(
+        "system_verification_contract",
+        "System and Verification Contract",
+        "system_verification_contract_owner",
+        "System and Verification Contract Owner",
+        (
+            "Produce the authoritative Auto Protocol contract by combining accepted product/domain contract content with backend/API, state, provider, security, and verification requirements."
+        ),
+        (
+            "Create auto_protocol_contract as structured JSON. It must include product_contract and domain_contract from the accepted upstream artifact, plus system_contract and verification_contract. "
+            "metadata_json.product_domain_contract_ref must name the upstream product_domain_contract artifact key, content_hash, and produced_by_stage_execution_id used to create this merged contract. "
+            "system_contract must cover APIs, state transitions, persistence invariants, provider ports/adapters, external callouts, secrets/auth boundaries, failure behavior, and docs/readme expectations when relevant. "
+            "verification_contract must list required_evidence items with evidence_id, kind, trust_tier, requirement_id, required status, and expected corroboration. Use browser_journey as the canonical browser proof kind. For serious products with unsafe actions, persistent state, provider callouts, or security boundaries, include at least one negative_case evidence item. "
+            "Require backend/API/data correctness evidence for serious products even when the UI looks polished. "
+            f"Preserve requirement terms: {terms_text}."
+        ),
+        (
+            "The contract is decision-complete and testable: each required workflow, backend/API behavior, provider callout, state invariant, safety gate, and browser/API journey maps to explicit evidence."
+        ),
+        _AUTO_CONTRACT_ARTIFACT_KEY,
+        "Auto Protocol Contract",
+        "Authoritative structured product/domain/system/verification contract consumed by final acceptance.",
+        artifact_path=_auto_artifact_path("auto-protocol-contract", extension=".json"),
+        dependencies=[_AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY, _AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY],
+        review_role_key="system_verification_contract_reviewer",
+        review_display_name="System and Verification Contract Reviewer",
+        review_artifact_key=_AUTO_CONTRACT_REVIEW_ARTIFACT_KEY,
+        review_artifact_display_name="System and Verification Contract Review",
+        review_artifact_description="Adversarial review of backend/API, state, provider, security, and evidence requirements in the authoritative contract.",
+        review_artifact_path=_auto_artifact_path("auto-protocol-contract-review"),
+        review_rubric=(
+            "Review backend/API, persistence/state, provider/data, security/live-action, UX, and verification sections. Choose revise if the contract lacks negative cases, machine-corroborated evidence, independent attestation, or operator-visible outcomes."
+        ),
+        rationale="The gate needs a reviewed system/verification contract artifact, not planner prose, to judge implementation evidence.",
+        required_skills=("technical architecture", "testing", "security", "data modeling"),
+    )
+    return [product_domain, system_verification]
+
+
+def _apply_contract_package_shape(
+    packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
+    *,
+    requirement_text: str,
+    terms_text: str,
+    contract_required: bool,
+    product_class: str,
+) -> list[ProtocolAutoDesignWorkPackageRecord]:
+    if not contract_required:
+        return list(packages)
+    contract_packages = _contract_stage_packages(
+        requirement_text=requirement_text,
+        terms_text=terms_text,
+        product_class=product_class,
+    )
+    planning_only = {
+        "requirements",
+        "technical_approach",
+        "input_model",
+        "domain_grounding",
+        "risk_assessment",
+        "product_domain_contract",
+        "system_verification_contract",
+    }
+    support = [
+        package
+        for package in packages
+        if package.package_key not in planning_only and package.package_key != "implementation"
+    ]
+    implementation = next((package for package in packages if package.package_key == "implementation"), None)
+    if implementation is None:
+        implementation = _work_package(
+            "implementation",
+            "Integrated Outcome",
+            "integrator",
+            "Outcome Integrator",
+            "Produce the primary requested outcome.",
+            "Produce the primary requested outcome.",
+            "The outcome is usable and inspectable.",
+            "produced_outcome",
+            "Produced Outcome",
+            "The primary deliverable requested by the user.",
+            artifact_path=_auto_artifact_path("output", extension=""),
+        )
+    dependency_seed = [
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+        _AUTO_PRODUCT_DOMAIN_CONTRACT_REVIEW_ARTIFACT_KEY,
+        _AUTO_CONTRACT_ARTIFACT_KEY,
+        _AUTO_CONTRACT_REVIEW_ARTIFACT_KEY,
+    ]
+    shaped_support: list[ProtocolAutoDesignWorkPackageRecord] = []
+    for package in support:
+        filtered_dependencies = [
+            dependency
+            for dependency in package.dependencies
+            if dependency not in {"requirements_plan", "requirements_review", "input_model", "risk_review", "domain_grounding", "technical_approach"}
+        ]
+        shaped_support.append(package.model_copy(update={
+            "dependencies": list(dict.fromkeys([*dependency_seed, *filtered_dependencies])),
+        }))
+    implementation_dependencies = [
+        *dependency_seed,
+        *(
+            artifact
+            for package in shaped_support
+            for artifact in (package.artifact_key, package.review_artifact_key)
+            if artifact
+        ),
+    ]
+    implementation = implementation.model_copy(update={
+        "dependencies": list(dict.fromkeys([*implementation_dependencies, *implementation.dependencies])),
+    })
+    return [*contract_packages, *shaped_support, implementation]
+
+
 def _normalize_model_work_packages(
     packages: Sequence[ProtocolAutoDesignWorkPackageRecord],
     *,
@@ -2108,6 +2421,21 @@ def _build_plan(
             model_response.domain if model_response is not None else "",
         )
     )
+    contract_required, product_class = _contract_required_for_auto_protocol(
+        requirement_text=requirement,
+        constraints_text=constraints,
+        runtime_expected=runtime_expected,
+        analysis=analysis,
+        model_response=model_response,
+    )
+    terms_text = ", ".join(list(analysis.requirement_terms)[:14]) or "the explicit user requirement"
+    work_packages = _apply_contract_package_shape(
+        work_packages,
+        requirement_text=requirement,
+        terms_text=terms_text,
+        contract_required=contract_required,
+        product_class=product_class,
+    )
 
     roles_by_key: dict[str, ProtocolAutoDesignRolePlanRecord] = {}
 
@@ -2154,9 +2482,24 @@ def _build_plan(
         "Final summary of artifacts, accepted reviews, revision loops, remaining risks, and exact inspection steps.",
         _auto_artifact_path("release-evidence"),
     )
+    if runtime_expected or contract_required:
+        ensure_artifact(
+            "producer_evidence_manifest",
+            "Producer Evidence Manifest",
+            "Structured producer evidence listing implemented runtime hooks, API probes, backend/state checks, provider checks, and smoke checks for the primary artifact.",
+            _auto_artifact_path("producer-evidence-manifest", extension=".json"),
+        )
+        ensure_artifact(
+            "reviewer_evidence_manifest",
+            "Reviewer Evidence Manifest",
+            "Structured reviewer evidence listing verified journeys, API probes, DB/state invariants, provider checks, security gates, domain source checks, and pass/fail assertions for final acceptance.",
+            _auto_artifact_path("reviewer-evidence-manifest", extension=".json"),
+        )
     artifacts = list(artifact_by_key.values())
 
     stage_key_by_package = {
+        "product_domain_contract": "produce_product_domain_contract",
+        "system_verification_contract": "produce_system_verification_contract",
         "requirements": "plan_requirements",
         "technical_approach": "define_technical_approach",
         "input_model": "model_inputs",
@@ -2173,6 +2516,8 @@ def _build_plan(
         "implementation": "produce_outcome",
     }
     review_key_by_package = {
+        "product_domain_contract": "review_product_domain_contract",
+        "system_verification_contract": "review_system_verification_contract",
         "requirements": "review_requirements",
         "technical_approach": "review_technical_approach",
         "input_model": "review_inputs",
@@ -2189,6 +2534,8 @@ def _build_plan(
         "implementation": "review_outcome",
     }
     work_display_by_package = {
+        "product_domain_contract": "Produce product and domain contract",
+        "system_verification_contract": "Produce system and verification contract",
         "requirements": "Map requirement and acceptance criteria",
         "technical_approach": "Define technical approach",
         "input_model": "Model required inputs",
@@ -2205,6 +2552,8 @@ def _build_plan(
         "implementation": "Integrate requested outcome",
     }
     review_display_by_package = {
+        "product_domain_contract": "Review product and domain contract",
+        "system_verification_contract": "Review system and verification contract",
         "requirements": "Review requirement coverage",
         "technical_approach": "Review technical approach",
         "input_model": "Review input model",
@@ -2235,7 +2584,7 @@ def _build_plan(
                 "This protocol expects a runnable primary artifact. Package it as a user-facing product: include a coherent UI/API, "
                 "tests or smoke steps, an outcome-readiness matrix, a root octopus-runtime.json manifest, and enough start/health/smoke metadata for the Registry to start it, proxy it, and let users try it. "
                 "Build and smoke-test the package during this stage so the manifest start_command launches a prepared artifact quickly instead of installing dependencies, compiling, testing, or packaging on user start. "
-                "Any user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
+                "Every user-triggered action in the UI must surface a clear result/outcome in the app itself, not require log inspection or raw JSON archaeology. "
                 f"{AUTO_PROTOCOL_CUSTOMER_ARTIFACT_BRANDING_GUIDANCE} "
                 f"{AUTO_PROTOCOL_OUTCOME_READINESS_GUIDANCE} "
                 f"{AUTO_PROTOCOL_RUNTIME_MANIFEST_GUIDANCE}"
@@ -2256,10 +2605,22 @@ def _build_plan(
             package.role_key,
             work_purpose,
             inputs=work_inputs,
-            outputs=[package.artifact_key],
+            outputs=(
+                [package.artifact_key, "producer_evidence_manifest"]
+                if package.package_key == "implementation" and (runtime_expected or contract_required)
+                else [package.artifact_key]
+            ),
         ))
         if package.package_key == "implementation":
-            available_artifacts = list(dict.fromkeys([*available_artifacts, package.artifact_key]))
+            available_artifacts = list(dict.fromkeys([
+                *available_artifacts,
+                package.artifact_key,
+                *(
+                    ["producer_evidence_manifest"]
+                    if runtime_expected or contract_required
+                    else []
+                ),
+            ]))
             continue
         review_inputs = list(dict.fromkeys([*work_inputs, package.artifact_key]))
         review_purpose = "\n".join([
@@ -2300,6 +2661,7 @@ def _build_plan(
                 "and record runtime evidence before accepting. Do not accept based on direct localhost or container-only smoke checks when the Registry-managed runtime cannot parse, start, route, or fetch the app. "
                 "Do not accept if the runtime start command performs build, dependency installation, packaging, tests, or developer-mode bootstrapping; the implementation stage must prepare the package first and the start command must only launch it. "
                 "For UI/API systems, run enough representative core journeys to prove breadth of the outcome, not just one happy path, and verify each result is visible and understandable in the app itself. "
+                "Write reviewer_evidence_manifest as JSON with checks for required hooks, executed journeys, assertions, console errors, and pass/fail outcome status. "
                 "Choose revise if the manifest is missing or invalid, the runtime cannot start, health fails, the UI/API cannot be exercised, "
                 "the primary artifact is hard to find, low-detail, not usable, missing required behavior, hides the result of core actions, exposes Octopus branding in customer-facing copy, lacks an outcome-readiness matrix, is unsupported by evidence, or below the stated quality bar. "
             )
@@ -2314,11 +2676,25 @@ def _build_plan(
             )
         )
         + (
+            (
+                "This protocol uses the v2 Auto Protocol contract. Read auto_protocol_contract and reviewer evidence requirements before accepting. "
+                "Write reviewer_evidence_manifest as JSON evidence items with evidence_id, kind, trust_tier, requirement_id, status, observed_at, artifact_content_hash, source_stage_execution_id, source_artifact_key, command_or_probe, observed_result, corroboration_refs, and failure_detail. "
+                "For serious products, acceptance must cover backend/API behavior, persistence or state invariants, provider/data callouts, security/live-action gates, domain caveats, and adversarial negative cases in addition to any browser journeys. "
+                "Do not accept when required evidence is only narrative, producer-only, stale, missing hashes, missing reviewer provenance, failed, skipped, or uncorroborated. "
+            )
+            if contract_required
+            else ""
+        )
+        + (
             "Record final release evidence: what was inspected, what worked, what remains risky, exact user-facing inspection steps, a pass/fail outcome-readiness matrix, a customer-facing branding check, and the visible outcome/result from each exercised core journey when applicable. "
             "Choose accept only when the primary artifact is ready for a human user to inspect. End with PROTOCOL_DECISION: accept, revise, or fail and PROTOCOL_SUMMARY."
         ),
-        inputs=[artifact.artifact_key for artifact in artifacts if artifact.artifact_key != "release_evidence"],
-        outputs=["release_evidence"],
+        inputs=[
+            artifact.artifact_key
+            for artifact in artifacts
+            if artifact.artifact_key not in {"release_evidence", "reviewer_evidence_manifest"}
+        ],
+        outputs=["release_evidence", *(["reviewer_evidence_manifest"] if (runtime_expected or contract_required) else [])],
         review_of="produce_outcome",
     ))
 
@@ -2342,6 +2718,15 @@ def _build_plan(
             "Primary artifact exists and is inspectable.",
             "Final acceptance records what was exercised or inspected.",
             "Release evidence links the artifact to the original requirement.",
+            *(
+                [
+                    "A reviewed auto_protocol_contract JSON artifact defines product, domain, system, and verification requirements for this run.",
+                    "Producer and reviewer evidence manifests bind required backend/API, data/provider, state, security, domain, and UI evidence to the current artifact hash.",
+                    "Reviewer-required evidence cannot be satisfied by producer-only claims or prose-only acceptance.",
+                ]
+                if contract_required
+                else []
+            ),
             *(
                 [
                     "A root octopus-runtime.json manifest exists for the primary artifact.",
@@ -2376,6 +2761,8 @@ def _build_plan(
         protocol_name=title,
         protocol_slug=slug,
         description=description,
+        product_class=product_class,
+        contract_required=contract_required,
         roles=roles,
         artifacts=artifacts,
         stages=stages,
@@ -2390,8 +2777,35 @@ def compile_auto_protocol_plan(
     *,
     requirement_text: str = "",
     constraints_text: str = "",
+    run_lessons: list[ProtocolRunLessonRecord] | None = None,
 ) -> dict[str, object]:
     role_by_key = {role.role_key: role for role in plan.roles}
+    lessons_payload = [item.model_dump(mode="json") for item in run_lessons or []]
+    lesson_lines: list[str] = []
+    for lesson in lessons_payload[:12]:
+        if not isinstance(lesson, Mapping):
+            continue
+        summary = _sentence(lesson.get("summary")) or _sentence(lesson.get("source_failure"))
+        if not summary:
+            continue
+        lesson_type = _snake(str(lesson.get("lesson_type") or lesson.get("category") or "lesson"))
+        applies_when = _sentence(lesson.get("applies_when")) or "when relevant to the requested product"
+        section = _snake(str(lesson.get("contract_section") or "verification_contract"))
+        required_evidence = lesson.get("required_evidence")
+        evidence_text = ""
+        if isinstance(required_evidence, Sequence) and not isinstance(required_evidence, (str, bytes)):
+            evidence_text = ", ".join(str(item or "").strip() for item in required_evidence if str(item or "").strip())
+        lesson_lines.append(
+            f"- {lesson_type}: {summary} Applies when: {applies_when}. Contract section: {section}."
+            + (f" Required evidence: {evidence_text}." if evidence_text else "")
+        )
+    lesson_instruction = ""
+    if lesson_lines:
+        lesson_instruction = (
+            "Inherited run lessons must become contract clauses, not generic prose. "
+            "Merge these lessons into product/domain/system/verification requirements where they apply:\n"
+            + "\n".join(lesson_lines)
+        )
     stages: list[dict[str, object]] = []
     for index, stage in enumerate(plan.stages):
         transitions: dict[str, str] = {}
@@ -2426,6 +2840,7 @@ def compile_auto_protocol_plan(
             stage.purpose.strip(),
             "",
             "Use the protocol run context, declared inputs, and artifact contract. Produce or update declared outputs only where this stage owns them.",
+            lesson_instruction if stage.stage_key in {"produce_product_domain_contract", "produce_system_verification_contract"} else "",
             "Do not leave foreground servers, watchers, or other long-running commands active. If a temporary local server is needed, stop it before final response.",
             decision_instruction,
         ]).strip()
@@ -2453,6 +2868,8 @@ def compile_auto_protocol_plan(
             "generated": True,
             "requirement": str(requirement_text or "").strip(),
             "constraints": str(constraints_text or "").strip(),
+            "product_class": str(plan.product_class or "").strip() or "lightweight_artifact",
+            "contract_required": bool(plan.contract_required),
             "primary_artifact_key": plan.primary_artifact.artifact_key,
             "primary_artifact": plan.primary_artifact.model_dump(mode="json"),
             "stage_count": len(plan.stages),
@@ -2463,6 +2880,55 @@ def compile_auto_protocol_plan(
         },
         "run_inputs": plan.run_profile.run_inputs,
     }
+    if lessons_payload:
+        auto_protocol = metadata["auto_protocol"]
+        if isinstance(auto_protocol, dict):
+            auto_protocol["run_lessons"] = lessons_payload
+    primary_behavior = str(plan.primary_artifact.open_behavior or "").strip().lower()
+    auto_protocol = metadata["auto_protocol"]
+    if isinstance(auto_protocol, dict) and plan.contract_required:
+        auto_protocol["acceptance_contract"] = {
+            "schema_version": 2,
+            "contract_required": True,
+            "product_class": str(plan.product_class or "").strip() or "serious_product",
+            "primary_artifact_key": plan.primary_artifact.artifact_key,
+            "contract_artifact_key": _AUTO_CONTRACT_ARTIFACT_KEY,
+            "contract_producer_stage_key": "produce_system_verification_contract",
+            "contract_review_stage_key": "review_system_verification_contract",
+            "product_domain_contract_artifact_key": _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+            "product_domain_contract_producer_stage_key": "produce_product_domain_contract",
+            "product_domain_contract_review_stage_key": "review_product_domain_contract",
+            "producer_manifest_artifact_key": "producer_evidence_manifest",
+            "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+            "required_evidence_kinds": list(_AUTO_V2_REQUIRED_EVIDENCE_KINDS),
+            "trust_tiers": {
+                "tier_1": "machine-corroborated Registry/runtime/fetch/snapshot evidence",
+                "tier_2": "independent reviewer attestation bound to artifact hash and stage provenance",
+                "tier_3": "advisory domain/source/residual-risk evidence",
+            },
+        }
+    if primary_behavior in _AUTO_RUNTIME_OPEN_BEHAVIORS:
+        if isinstance(auto_protocol, dict) and not plan.contract_required:
+            auto_protocol["acceptance_contract"] = {
+                "schema_version": 1,
+                "primary_artifact_key": plan.primary_artifact.artifact_key,
+                "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
+                "required_journeys": [
+                    {
+                        "journey_key": "primary_happy_path",
+                        "description": "Exercise the primary user action and verify that the user-visible result is updated through the Registry-routed runtime.",
+                        "required_hooks": ["primary_action", "primary_result"],
+                        "steps": [
+                            {"action": "click", "hook": "primary_action"},
+                            {"action": "assert_visible", "hook": "primary_result"},
+                        ],
+                        "assertions": [
+                            {"action": "assert_visible", "hook": "primary_result"},
+                            {"action": "no_console_errors"},
+                        ],
+                    }
+                ],
+            }
     return draft_protocol_document_data({
         "schema_version": PROTOCOL_SCHEMA_VERSION,
         "metadata": metadata,
@@ -2835,7 +3301,15 @@ def _semantic_warnings_for_session(
         "safety and risk review": ("risk", "safety", "security"),
     }
     stage_text = _normalized_words(*(stage.stage_key for stage in plan.stages), *(stage.display_name for stage in plan.stages))
+    contract_stage_present = any(stage.stage_key == "produce_system_verification_contract" for stage in plan.stages)
     for skill, required_tokens in skill_stage_requirements.items():
+        if contract_stage_present and skill in {
+            "technical architecture",
+            "domain grounding",
+            "data and input modeling",
+            "safety and risk review",
+        }:
+            continue
         if skill in analysis.skills and not any(token in stage_text for token in required_tokens):
             unresolved.append(ProtocolAutoDesignWarningRecord(
                 code="semantic.skill_missing",
@@ -3039,6 +3513,7 @@ def generate_auto_protocol_session(
         plan,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
+        run_lessons=list(request.run_lessons or []),
     )
     draft, validation, repair_notes = _validate_and_repair_protocol_document(draft, request)
     warnings, unresolved = _warnings_for_session(request, validation)
@@ -3089,11 +3564,13 @@ def generate_auto_protocol_session(
         source_protocol_id=request.target_protocol_id,
         source_version_id=request.target_version_id,
         source_draft_revision=request.target_draft_revision,
+        source_run_id=request.source_run_id,
         target_protocol_id=request.target_protocol_id,
         target_draft_revision=request.target_draft_revision,
         requirement_text=request.requirement_text,
         constraints_text=request.constraints_text,
         resource_refs=list(request.resource_refs or []),
+        run_lessons=list(request.run_lessons or []),
         model_response=request.model_response,
         analysis=analysis,
         plan=plan,
@@ -3168,12 +3645,17 @@ def revise_auto_protocol_session(
     elif canonical_requirement:
         regenerated_metadata["description"] = _sentence(canonical_requirement)
     regenerated_auto_meta = dict(regenerated_metadata.get("auto_protocol") or {})
+    source_auto_meta = metadata.get("auto_protocol") if isinstance(metadata.get("auto_protocol"), dict) else {}
+    source_contract = source_auto_meta.get("acceptance_contract") if isinstance(source_auto_meta, dict) else None
+    if isinstance(source_contract, dict) and source_contract.get("required_journeys"):
+        regenerated_auto_meta["acceptance_contract"] = dict(source_contract)
     regenerated_auto_meta.update({
         "generated": True,
         "requirement": canonical_requirement,
         "revision_of_protocol_id": str(request.target_protocol_id or ""),
         "revision_of_version_id": str(request.target_version_id or ""),
         "revision_requests": revisions[-_AUTO_REVISION_HISTORY_MAX:],
+        "run_lessons": [item.model_dump(mode="json") for item in request.run_lessons or []],
     })
     regenerated_metadata["auto_protocol"] = regenerated_auto_meta
     compact_profile = _run_profile_with_problem_statement(session.run_profile, canonical_requirement)
@@ -3212,6 +3694,7 @@ def revise_auto_protocol_session(
         "requirement_text": request.requirement_text,
         "constraints_text": request.constraints_text,
         "resource_refs": list(request.resource_refs or []),
+        "run_lessons": list(request.run_lessons or []),
         "plan": compact_plan,
         "run_profile": compact_profile,
         "draft_definition_json": RegistryJsonRecord.model_validate(regenerated_draft),
@@ -3221,6 +3704,7 @@ def revise_auto_protocol_session(
         "change_summary": [
             "Regenerated the selected protocol through the canonical requirement-specific compiler.",
             "Preserved the target protocol identity for apply, publish, and run.",
+            *([f"Carried forward {len(request.run_lessons)} structured run lessons."] if request.run_lessons else []),
             *repair_notes,
         ],
     })
@@ -3323,6 +3807,7 @@ __all__ = [
     "ProtocolAutoDesignModelResponseRecord",
     "ProtocolAutoDesignEventSummaryRecord",
     "ProtocolAutoDesignChangeSummaryRecord",
+    "ProtocolRunLessonRecord",
     "ProtocolAutoDesignRequestRecord",
     "ProtocolAutoDesignSessionRecord",
     "ProtocolAutoDesignRenderCardRecord",

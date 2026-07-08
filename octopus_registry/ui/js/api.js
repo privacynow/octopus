@@ -369,13 +369,15 @@ const API = (() => {
         createProtocolDraft: (body = {}) =>
             request('POST', '/v1/protocol-drafts', { body }),
         createProtocolAutoSession: (body = {}) =>
-            request('POST', '/v1/protocol-auto/sessions', { body, timeoutMs: 120000 }),
+            request('POST', '/v1/protocol-auto/sessions', { body }),
+        listProtocolAutoSessions: (params = {}) =>
+            request('GET', '/v1/protocol-auto/sessions', { params }),
         getProtocolAutoSession: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}`),
         listProtocolAutoSessionEvents: (sessionId) =>
             request('GET', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/events`),
         reviseProtocolAutoSession: (sessionId, body = {}) =>
-            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body, timeoutMs: 120000 }),
+            request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/revise`, { body }),
         applyProtocolAutoSession: (sessionId) =>
             request('POST', `/v1/protocol-auto/sessions/${encodeURIComponent(sessionId)}/apply`, { body: {} }),
         publishProtocolAutoSession: (sessionId) =>
@@ -431,6 +433,11 @@ const API = (() => {
             }),
         getProtocolRun: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}`),
+        forkProtocolRunFromStage: (id, body = {}, opts = {}) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/fork-from-stage`, {
+                body,
+                headers: opts.idempotencyKey ? { 'Idempotency-Key': opts.idempotencyKey } : undefined,
+            }),
         getProtocolRunParticipants: (id) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/participants`),
         getProtocolRunArtifacts: (id) =>
@@ -491,6 +498,8 @@ const API = (() => {
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/logs`),
         getProtocolRunArtifactRuntimeEvents: (id, artifactKey, limit = 25) =>
             request('GET', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/events?limit=${encodeURIComponent(limit)}`),
+        runProtocolRunArtifactRuntimeJourney: (id, artifactKey, journeyKey) =>
+            request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/journeys/${encodeURIComponent(journeyKey)}/run`, { body: {}, timeoutMs: 30000 }),
         archiveProtocolRunArtifactRuntime: (id, artifactKey) =>
             request('POST', `/v1/protocol-runs/${encodeURIComponent(id)}/artifacts/${encodeURIComponent(artifactKey)}/runtime/archive`, { body: {} }),
         deleteProtocolRunArtifactRuntime: (id, artifactKey) =>

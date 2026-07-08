@@ -44,14 +44,41 @@ ProtocolArtifactRuntimeEventKind = Literal[
     "archived",
     "deleted",
     "failed",
+    "journey_requested",
+    "journey_completed",
+    "journey_failed",
 ]
+ProtocolRuntimeCapabilityAction = Literal[
+    "runtime:start",
+    "runtime:stop",
+    "runtime:read",
+    "runtime:fetch",
+    "runtime:event",
+    "journey:read",
+    "journey:result",
+    "journey:run",
+]
+ProtocolEvidenceTrustTier = Literal["tier_1", "tier_2", "tier_3"]
+ProtocolEvidenceStatus = Literal["passed", "failed", "skipped", "stale", "uncorroborated", "blocked"]
 ProtocolResolutionOutcome = Literal["queued", "ok", "error"]
 ProtocolArtifactVerificationState = Literal["declared", "available", "verified", "missing", "waived"]
 ProtocolArtifactRetentionState = Literal["active", "archived", "expired", "deleted", "unavailable"]
 ProtocolArtifactSnapshotKind = Literal["file", "directory", "text", "external"]
-ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back"]
-ProtocolIssueKind = Literal["blocked_run", "invalid_contract", "stuck_lease", "expired_timeout"]
+ProtocolOperatorAction = Literal["cancel", "retry", "accept", "send_back", "interrupt"]
+PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS = 14_400
+PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS = 10_800
+PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS = 10_800
+ProtocolIssueKind = Literal[
+    "blocked_run",
+    "invalid_contract",
+    "runtime_evidence_required",
+    "operator_interrupted",
+    "acceptance_contract_invalid",
+    "stuck_lease",
+    "expired_timeout",
+]
 ProtocolDocumentTextFormat = Literal["json", "yaml"]
+ProtocolRunForkMode = Literal["rerun_selected", "continue_after"]
 ProtocolDraftSourceKind = Literal["blank", "template", "protocol"]
 ProtocolValidationMode = Literal["strict", "draft"]
 ProtocolAuthoringSurface = Literal["standard", "operator"]
@@ -534,6 +561,10 @@ class ProtocolRunRecord(RegistryRecordModel):
     created_at: str = ""
     updated_at: str = ""
     completed_at: str = ""
+    parent_protocol_run_id: str = ""
+    parent_stage_execution_id: str = ""
+    fork_mode: str = ""
+    fork_reason: str = ""
 
 
 class ProtocolRunParticipantRecord(RegistryRecordModel):
@@ -610,6 +641,22 @@ class ProtocolArtifactSnapshotRecord(RegistryRecordModel):
     created_by: str = ""
     deleted_at: str = ""
     deleted_by: str = ""
+    produced_by_stage_execution_id: str = ""
+
+
+class ProtocolRunForkRequestRecord(RegistryRecordModel):
+    stage_execution_id: str = ""
+    fork_mode: ProtocolRunForkMode = "rerun_selected"
+    fork_reason: str = ""
+
+
+class ProtocolRunForkResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: str = ""
+    message: str = ""
+    run: ProtocolRunRecord | None = None
+    stage_execution: ProtocolStageExecutionRecord | None = None
+    missing_snapshots: list[str] = Field(default_factory=list)
 
 
 class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):
@@ -636,6 +683,21 @@ class ProtocolArtifactRuntimeEndpointRecord(RegistryRecordModel):
         return text or "GET"
 
 
+class ProtocolRuntimeTestHookRecord(RegistryRecordModel):
+    hook: str = ""
+    selector: str = ""
+    kind: Literal["button", "input", "text", "region", "link", "other"] = "other"
+    description: str = ""
+
+    @field_validator("hook", "selector", mode="before")
+    @classmethod
+    def _nonblank(cls, value: object, info) -> str:
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{info.field_name} must not be blank")
+        return text
+
+
 class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
     runtime_kind: ProtocolArtifactRuntimeKind = "static"
     display_name: str = ""
@@ -650,6 +712,7 @@ class ProtocolArtifactRuntimeManifestRecord(RegistryRecordModel):
     max_runtime_seconds: int = Field(default=3600, ge=60, le=86400)
     endpoints: list[ProtocolArtifactRuntimeEndpointRecord] = Field(default_factory=list)
     smoke_test: list[str] = Field(default_factory=list)
+    test_hooks: list[ProtocolRuntimeTestHookRecord] = Field(default_factory=list)
     metadata: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
 
     @field_validator("working_directory", mode="before")
@@ -757,6 +820,132 @@ class ProtocolArtifactRuntimeEventRecord(RegistryRecordModel):
     summary: str = ""
     metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
     created_at: str = ""
+
+
+class ProtocolRuntimeJourneySpecRecord(RegistryRecordModel):
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    journey_key: str = ""
+    target_url: str = ""
+    timeout_ms: int = Field(default=120000, ge=1000, le=600000)
+    steps: list[RegistryJsonRecord] = Field(default_factory=list)
+    assertions: list[RegistryJsonRecord] = Field(default_factory=list)
+    hooks: dict[str, ProtocolRuntimeTestHookRecord] = Field(default_factory=dict)
+    allowed_external_origins: list[str] = Field(default_factory=list)
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolRuntimeJourneyResultRecord(RegistryRecordModel):
+    protocol_run_id: str = ""
+    artifact_key: str = ""
+    journey_key: str = ""
+    journey_run_id: str = ""
+    ok: bool = False
+    status: str = ""
+    summary: str = ""
+    assertions: list[RegistryJsonRecord] = Field(default_factory=list)
+    console_errors: list[str] = Field(default_factory=list)
+    duration_ms: int = Field(default=0, ge=0)
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolEvidenceItemRecord(RegistryRecordModel):
+    evidence_id: str = ""
+    kind: str = ""
+    trust_tier: ProtocolEvidenceTrustTier | str = "tier_2"
+    requirement_id: str = ""
+    status: ProtocolEvidenceStatus | str = "blocked"
+    observed_at: str = ""
+    artifact_content_hash: str = ""
+    runtime_instance_id: str = ""
+    source_stage_execution_id: str = ""
+    source_artifact_key: str = ""
+    command_or_probe: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    observed_result: str = ""
+    corroboration_refs: list[str] = Field(default_factory=list)
+    failure_detail: str = ""
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+    @field_validator("trust_tier", mode="before")
+    @classmethod
+    def _trust_tier(cls, value: object) -> str:
+        text = str(value or "tier_2").strip().lower().replace("-", "_").replace(" ", "_")
+        if text in {"1", "tier1"}:
+            return "tier_1"
+        if text in {"2", "tier2"}:
+            return "tier_2"
+        if text in {"3", "tier3"}:
+            return "tier_3"
+        return text or "tier_2"
+
+
+class ProtocolEvidenceManifestRecord(RegistryRecordModel):
+    schema_version: int = 1
+    artifact_key: str = ""
+    artifact_content_hash: str = ""
+    source_stage_execution_id: str = ""
+    produced_at: str = ""
+    evidence_items: list[ProtocolEvidenceItemRecord] = Field(default_factory=list)
+    summary: str = ""
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolAcceptanceContractV2SkeletonRecord(RegistryRecordModel):
+    schema_version: int = 2
+    contract_required: bool = False
+    product_class: str = ""
+    primary_artifact_key: str = ""
+    contract_artifact_key: str = "auto_protocol_contract"
+    contract_producer_stage_key: str = "produce_system_verification_contract"
+    contract_review_stage_key: str = "review_system_verification_contract"
+    product_domain_contract_artifact_key: str = "product_domain_contract"
+    product_domain_contract_producer_stage_key: str = "produce_product_domain_contract"
+    product_domain_contract_review_stage_key: str = "review_product_domain_contract"
+    producer_manifest_artifact_key: str = "producer_evidence_manifest"
+    reviewer_manifest_artifact_key: str = "reviewer_evidence_manifest"
+    required_evidence_kinds: list[str] = Field(default_factory=list)
+    trust_tiers: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    legacy_v1_journeys: list[RegistryJsonRecord] = Field(default_factory=list)
+
+
+class ProtocolAutoProtocolContractRecord(RegistryRecordModel):
+    schema_version: int = 2
+    product_contract: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    domain_contract: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    system_contract: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    verification_contract: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+    operator_decisions_required: list[RegistryJsonRecord] = Field(default_factory=list)
+    metadata_json: RegistryJsonRecord = Field(default_factory=RegistryJsonRecord)
+
+
+class ProtocolRuntimeCapabilityTokenRecord(RegistryRecordModel):
+    capability_token_id: str = ""
+    capability_ref: str = ""
+    protocol_run_id: str = ""
+    protocol_stage_execution_id: str = ""
+    artifact_key: str = ""
+    participant_key: str = ""
+    target_agent_id: str = ""
+    allowed_actions: list[ProtocolRuntimeCapabilityAction | str] = Field(default_factory=list)
+    expires_at: str = ""
+    revoked_at: str = ""
+    exchange_count: int = 0
+    max_exchange_count: int = 5
+    created_at: str = ""
+    updated_at: str = ""
+    actor_ref: str = ""
+
+
+class ProtocolRuntimeCapabilityExchangeRecord(RegistryRecordModel):
+    capability_ref: str = ""
+
+
+class ProtocolRuntimeCapabilityExchangeResultRecord(RegistryRecordModel):
+    ok: bool = False
+    status: str = ""
+    message: str = ""
+    bearer_token: str = ""
+    token: ProtocolRuntimeCapabilityTokenRecord | None = None
 
 
 class ProtocolArtifactRuntimeHealthRecord(RegistryRecordModel):
@@ -886,12 +1075,14 @@ class ProtocolIssueRecord(RegistryRecordModel):
     issue_detail: str = ""
     lease_expires_at: str = ""
     timeout_at: str = ""
+    task_updated_at: str = ""
     updated_at: str = ""
 
 
 class ProtocolMaintenanceResultRecord(RegistryRecordModel):
     swept_count: int = 0
     affected_run_ids: list[str] = Field(default_factory=list)
+    affected_auto_session_ids: list[str] = Field(default_factory=list)
 
 
 class ProtocolTextDocumentRecord(RegistryRecordModel):
@@ -1040,6 +1231,7 @@ class ProtocolStageRuntimeContractRecord(RegistryRecordModel):
     participant_key: str = ""
     stage_key: str = ""
     stage_kind: ProtocolStageKind = "work"
+    timeout_seconds: int = Field(default=0, ge=0)
     strict_completion: bool = False
     require_output_verification: bool = False
     output_artifacts: list[ProtocolStageArtifactContractRecord] = Field(default_factory=list)
@@ -1159,6 +1351,9 @@ __all__ = [
         "PROTOCOL_DEFAULT_RUN_ORG_ID",
         "PROTOCOL_DEFAULT_OPERATOR_REF",
         "PROTOCOL_DEFAULT_VISIBILITY",
+        "PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS",
+        "PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS",
+        "PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS",
         "REHEARSAL_AUTHORITY_REF",
         "PROTOCOL_SUPPORTED_RUN_STATUSES",
         "PROTOCOL_SUPPORTED_STAGE_STATUSES",

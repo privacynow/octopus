@@ -1122,6 +1122,32 @@ def default_protocol_document_slug(document: ProtocolDefinitionDocumentRecord) -
     return display or "protocol"
 
 
+def protocol_stage_effective_timeout_seconds(
+    document: ProtocolDefinitionDocumentRecord,
+    stage: ProtocolStageDefinitionRecord,
+) -> int:
+    explicit = int(stage.timeout_seconds or 0)
+    if explicit > 0:
+        return explicit
+    auto_protocol = document.metadata.get("auto_protocol", {})
+    if not isinstance(auto_protocol, dict) or auto_protocol.get("generated") is not True:
+        return 0
+    primary = auto_protocol.get("primary_artifact", {})
+    open_behavior = ""
+    if isinstance(primary, dict):
+        open_behavior = str(primary.get("open_behavior") or "").strip().lower()
+    contract_required = bool(auto_protocol.get("contract_required"))
+    has_acceptance_contract = isinstance(auto_protocol.get("acceptance_contract"), dict)
+    runtime_expected = open_behavior in {"runtime", "app", "service", "api", "playable"}
+    if not (contract_required or has_acceptance_contract or runtime_expected):
+        return 0
+    if stage.stage_kind == "acceptance":
+        return PROTOCOL_GENERATED_SERIOUS_ACCEPTANCE_TIMEOUT_SECONDS
+    if stage.stage_kind == "review":
+        return PROTOCOL_GENERATED_SERIOUS_REVIEW_TIMEOUT_SECONDS
+    return PROTOCOL_GENERATED_SERIOUS_WORK_TIMEOUT_SECONDS
+
+
 def protocol_stage_runtime_contract(
     *,
     document: ProtocolDefinitionDocumentRecord,
@@ -1155,6 +1181,7 @@ def protocol_stage_runtime_contract(
         participant_key=stage.participant_key,
         stage_key=stage.stage_key,
         stage_kind=stage.stage_kind,
+        timeout_seconds=protocol_stage_effective_timeout_seconds(document, stage),
         strict_completion=stage.strict_completion,
         require_output_verification=require_verification,
         output_artifacts=outputs,

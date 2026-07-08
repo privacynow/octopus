@@ -139,6 +139,63 @@ def test_run_init_backfills_nullable_default_visibility_columns(postgres_truncat
         assert constraints[table][1].lower() == "false"
 
 
+def test_run_init_fails_legacy_auto_protocol_planning_without_routed_task(postgres_truncated):
+    """Planner migration leaves no invisible legacy planning sessions without task ownership."""
+    from app.db.postgres import get_connection
+
+    with get_connection(postgres_truncated) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_auto_sessions (
+                    session_id, status, planner_request_id, planner_task_id,
+                    planner_state_json, created_at, updated_at
+                )
+                VALUES (
+                    'legacy-planning-session', 'planning', 'legacy-management-request', '',
+                    '{"planner_status":"running"}'::jsonb,
+                    '2026-07-07T12:00:00Z', '2026-07-07T12:00:00Z'
+                )
+                """
+            )
+            cur.execute(
+                """
+                INSERT INTO agent_registry.protocol_auto_sessions (
+                    session_id, status, planner_request_id, planner_task_id,
+                    planner_state_json, created_at, updated_at
+                )
+                VALUES (
+                    'routed-planning-session', 'planning', '', 'auto-design:routed',
+                    '{"planner_status":"queued"}'::jsonb,
+                    '2026-07-07T12:01:00Z', '2026-07-07T12:01:00Z'
+                )
+                """
+            )
+        conn.commit()
+
+        errors = run_init(conn)
+        assert errors == []
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id, status, planner_state_json
+                FROM agent_registry.protocol_auto_sessions
+                WHERE session_id IN ('legacy-planning-session', 'routed-planning-session')
+                ORDER BY session_id
+                """
+            )
+            rows = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+    legacy_status, legacy_state = rows["legacy-planning-session"]
+    routed_status, routed_state = rows["routed-planning-session"]
+    assert legacy_status == "failed"
+    assert legacy_state["planner_status"] == "failed"
+    assert "routed-task planner migration" in legacy_state["progress_summary"]
+    assert routed_status == "planning"
+    assert routed_state["planner_status"] == "queued"
+
+
 def test_protocol_responsiveness_indexes_exist(postgres_truncated):
     """Run and issue list filters have matching indexes for UI-scale history."""
     from app.db.postgres import get_connection
@@ -228,10 +285,20 @@ def test_run_init_restores_missing_additive_protocol_columns(postgres_truncated)
             cur.execute("ALTER TABLE agent_registry.protocol_definitions DROP COLUMN owner_org_id")
             cur.execute("ALTER TABLE agent_registry.protocol_definition_versions DROP COLUMN published_by")
             cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN blocked_code")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN parent_protocol_run_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN parent_stage_execution_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN fork_mode")
+            cur.execute("ALTER TABLE agent_registry.protocol_runs DROP COLUMN fork_reason")
             cur.execute("ALTER TABLE agent_registry.protocol_run_participants DROP COLUMN resolution_outcome")
             cur.execute("ALTER TABLE agent_registry.protocol_stage_executions DROP COLUMN timeout_at")
             cur.execute("ALTER TABLE agent_registry.protocol_artifacts DROP COLUMN verification_state")
+            cur.execute("ALTER TABLE agent_registry.protocol_artifact_snapshots DROP COLUMN produced_by_stage_execution_id")
             cur.execute("ALTER TABLE agent_registry.protocol_transitions DROP COLUMN error_code")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN run_lessons_json")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN planner_request_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN planner_agent_id")
+            cur.execute("ALTER TABLE agent_registry.protocol_auto_sessions DROP COLUMN source_document_json")
+            cur.execute("DROP TABLE agent_registry.protocol_runtime_capability_tokens")
         conn.commit()
 
         errors = run_init(conn)
@@ -306,6 +373,7 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "result_json",
             "error_code",
             "error_detail",
+            "timeout_seconds",
             "created_at",
             "completed_at",
         },
@@ -332,6 +400,35 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "content",
             "metadata_json",
             "created_at",
+        },
+        "resources": {
+            "resource_id",
+            "owner_actor_ref",
+            "source_surface",
+            "source_ref",
+            "original_name",
+            "mime_type",
+            "size_bytes",
+            "content_hash",
+            "storage_uri",
+            "lifecycle_state",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+            "deleted_at",
+            "deleted_by",
+        },
+        "resource_attachments": {
+            "attachment_id",
+            "resource_id",
+            "target_kind",
+            "target_ref",
+            "relation",
+            "metadata_json",
+            "created_by",
+            "created_at",
+            "detached_at",
+            "detached_by",
         },
         "guidance_approvals": {
             "record_id",
@@ -481,6 +578,10 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "created_at",
             "updated_at",
             "completed_at",
+            "parent_protocol_run_id",
+            "parent_stage_execution_id",
+            "fork_mode",
+            "fork_reason",
         },
         "protocol_scenarios": {
             "protocol_scenario_id",
@@ -585,10 +686,20 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "source_protocol_id",
             "source_version_id",
             "source_draft_revision",
+            "source_run_id",
             "target_protocol_id",
             "target_draft_revision",
             "requirement_text",
             "constraints_text",
+            "resource_refs_json",
+            "run_lessons_json",
+            "planner_request_id",
+            "planner_task_id",
+            "planner_policy",
+            "planner_agent_id",
+            "planner_state_json",
+            "prompt_diagnostics_json",
+            "source_document_json",
             "planner_response_json",
             "analysis_json",
             "plan_json",
@@ -666,6 +777,25 @@ def test_registry_init_schema_matches_current_store_contract(postgres_truncated)
             "created_by",
             "deleted_at",
             "deleted_by",
+            "produced_by_stage_execution_id",
+        },
+        "protocol_runtime_capability_tokens": {
+            "capability_token_id",
+            "capability_ref_hash",
+            "bearer_token_hash",
+            "protocol_run_id",
+            "protocol_stage_execution_id",
+            "artifact_key",
+            "participant_key",
+            "target_agent_id",
+            "allowed_actions_json",
+            "expires_at",
+            "revoked_at",
+            "exchange_count",
+            "max_exchange_count",
+            "created_at",
+            "updated_at",
+            "actor_ref",
         },
         "workspace_cleanup_inventory": {
             "inventory_id",

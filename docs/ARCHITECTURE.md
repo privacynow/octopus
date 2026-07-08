@@ -268,24 +268,45 @@ before bot handling continues.
 Auto Protocol uses the same protocol lifecycle as manual authoring. Registry
 owns sessions, persistence, HTTP actions, and UI state. It does not execute a
 model provider in-process. When a user creates or revises an Auto Protocol
-session, Registry synchronously sends a `design_auto_protocol` management
-request to a connected provider-capable bot and waits for the typed planner
-response. The bot runtime performs the provider-backed semantic planning step
-and returns typed SDK records. The SDK compiler then turns those records into
-one canonical protocol document and applies validation, semantic policy, stage
-budgets, review policy, and primary-artifact metadata.
+session, Registry creates a durable session in `planning` status and queues a
+hidden `auto_design` routed task to a connected provider-capable bot. The
+create/revise HTTP request returns the planning session immediately; UI and
+client surfaces subscribe to `protocol-auto-session:{id}` and poll as fallback.
+When the bot posts the typed planner result, routed-task result ingestion
+finalizes the session through the SDK compiler. The compiler turns those
+records into one canonical protocol document and applies validation, semantic
+policy, stage budgets, review policy, and primary-artifact metadata.
+Planner failures are persisted on the same session as failed/blocking details
+instead of being represented only as transport timeouts.
+When a generated serious-product protocol runs, each stage's timeout budget is
+derived from Auto Protocol metadata unless an operator explicitly authored a
+stage timeout. Generated documents therefore persist `timeout_seconds: 0`, while
+dispatch preflight writes the derived `timeout_at` to the stage execution and
+the routed task carries the same value in `protocol_stage_contract`. Bot
+execution reads that contract into `RunContext.timeout_seconds`, and providers
+honor the per-stage budget before falling back to the bot's global timeout.
 
 The request path is:
 
 ```text
 Registry UI or Telegram
   -> /v1/protocol-auto/sessions
-  -> Registry management client
+  -> protocol_auto_sessions status=planning
+  -> hidden auto_design routed task
   -> bot registry-delivery transport
   -> app/runtime/auto_protocol_design.py provider call
+  -> routed task result ingestion
   -> SDK Auto Protocol compiler
   -> normal protocol draft / publish / run lifecycle
 ```
+
+New planner work must use routed tasks because they already provide queueing,
+task status, cancellation, delivery leases, hidden task records, and task
+result ingestion. Management requests remain for short synchronous operations;
+bots reject new management-channel `design_auto_protocol` requests with
+`auto_design_requires_routed_task`. Only historical Auto Protocol sessions that
+already reference old management requests continue to reconcile through
+management-request status during maintenance.
 
 Generated protocols declare a primary artifact in `metadata.auto_protocol`.
 Runs UI and Telegram use that metadata to promote the user-facing output before
@@ -293,11 +314,50 @@ supporting plans, reviews, and release evidence. The normal generated topology
 keeps the primary outcome stage second-last and uses one final adversarial
 acceptance stage that can send the work back to the outcome stage.
 
+For serious products, the planner metadata is deliberately not the full
+contract. `metadata.auto_protocol.acceptance_contract` schema version 2 is a
+frozen skeleton: product class, `contract_required`, the
+`product_domain_contract` and `auto_protocol_contract` artifact keys, expected
+contract producer/review stages, manifest keys, and required evidence kinds.
+The authoritative contract is run-produced in two reviewed artifact snapshots:
+`product_domain_contract` from `produce_product_domain_contract`, then
+`auto_protocol_contract` from `produce_system_verification_contract`. The merged
+contract must reference the product/domain snapshot by artifact key, content
+hash, and producing stage execution id. The acceptance gate resolves both
+snapshots by `produced_by_stage_execution_id` and rejects missing, wrong-stage,
+stale, malformed, unresolved, or unreviewed contracts. This keeps the planner
+from self-authoring the entire acceptance bar and gives the run a concrete
+artifact trail.
+
+The compact serious-product topology is:
+
+1. `produce_product_domain_contract`
+2. `review_product_domain_contract`
+3. `produce_system_verification_contract`
+4. `review_system_verification_contract`
+5. optional implementation-support work/review pairs
+6. `produce_outcome`
+7. `final_evidence`
+
+The specialist review burden is expressed as rubric sections inside the two
+contract reviews and the final evidence manifest, not six independent reviewer
+participants. The compiler still keeps the primary artifact stage immediately
+before final acceptance and stays within the normal stage cap.
+
 Existing-run improvement is the same Auto Protocol path. Registry and Telegram
 build run-context requirement text from the selected run, then create a
 `revise` Auto Protocol session against that run's protocol id. There is no
 separate artifact patcher, run-specific generator, or Telegram-only protocol
 revision path.
+
+Run improvement also carries structured `run_lessons` alongside the compacted
+run context. Lessons are harvested from blocker codes, transitions, runtime
+events, review decisions, missing artifacts, and operator feedback as reusable
+contract clauses with lesson type, applies-when text, target contract section,
+requirement id, required evidence, source run, and source failure. The compiler
+injects those clauses into the next product/domain and system/verification
+contract-stage instructions so future revisions preserve the scar tissue as
+requirements instead of generic prompt prose.
 
 Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
 must render the same session state, warnings, primary artifact contract, and
@@ -744,10 +804,43 @@ Operator actions are versioned run mutations:
 | `retry` | Re-dispatch the current failed/blocked stage. |
 | `accept` | Accept current stage outcome when the run is waiting for operator decision. |
 | `send-back` | Send a review/acceptance stage back for more work. |
+| `interrupt` | Block the active stage with `operator_interrupted` and request provider cancellation for the assigned task. |
 | `cancel` | Stop the run and write terminal audit state. |
 
 Run actions use `If-Match` and `Idempotency-Key` where applicable. This prevents
 duplicate operator mutations and stale UI writes from corrupting run state.
+Run mutations, routed result application, and blocked-runtime auto-accept
+rechecks lock the protocol run row before stage rows while applying state
+transitions. Postgres deadlock/serialization failures on these mutation paths
+are retried with the same idempotency rules, so concurrent result delivery and
+operator actions resolve to one durable outcome instead of surfacing a transient
+500.
+
+Provider cancellation is delivered through the existing Registry management
+bridge. Protocol `cancel` and `interrupt` create a targeted management request
+for the routed task's assigned agent. The bot runtime maps that request to its
+local provider subprocess when the subprocess is still running. Late provider
+results after terminal or blocked stage state are preserved in task/audit
+metadata and do not advance the engine or update protocol artifact rows.
+`interrupt` is enforced by the protocol engine and store; terminal runs and
+completed stages cannot be reopened by posting the action directly.
+
+Structured Auto Protocol acceptance is still one gate:
+`_runtime_acceptance_evidence_gate` in `protocol_store.py`. Schema v1 contracts
+use the structured journey path. Schema v2 contracts first resolve the reviewed
+`product_domain_contract` and `auto_protocol_contract` snapshots, verify the
+merged contract's product/domain snapshot reference, then resolve the producer
+and reviewer evidence manifests. The gate blocks unresolved
+`operator_decisions_required` and emits both the legacy
+`missing_runtime_evidence` strings and structured `evidence_status` rows for UI
+evidence matrices. Tier 1 evidence is cross-checked against Registry facts such
+as runtime start/health events, correlated journey events, routed fetch events,
+and artifact snapshot hashes; unsupported Tier 1 kinds block. Tier 2 evidence
+is accepted only from the expected independent reviewer or verification stage
+and only when it matches the current artifact hash. Tier 3 evidence is displayed
+as advisory domain/source/residual-risk context and cannot substitute for
+required Tier 1 or Tier 2 evidence. Producer evidence can support review but
+does not satisfy reviewer-required evidence.
 
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,
@@ -790,6 +883,12 @@ Artifact resolution rules:
   expose file contents except through explicit content routes. Runtime
   instances and runtime events are part of the run export so reviewer evidence,
   health checks, starts/stops, and routed UI/API exercises are auditable.
+- Protocol run artifact paths are materialized under run-scoped workspace
+  prefixes so child runs created by fork/resume do not write to the parent run's
+  artifact paths.
+- Artifact snapshots include the producing stage execution when available. Fork
+  and resume use that linkage, plus retained snapshot content, to reconstruct
+  the selected stage boundary deterministically before dispatching a child run.
 - Protocol package export is a definition-sharing path. It includes the
   protocol document and required skill package documents, not produced run
   artifacts.
@@ -1021,6 +1120,7 @@ Security boundaries in the current runtime:
 | UI login | Session middleware, password/token validation, auth attempt limiting. |
 | UI mutations | CSRF token from `/v1/auth/csrf`, `X-CSRF-Token` on mutating requests. |
 | Agent API | Enrollment token for first enroll, issued agent token for runtime calls. |
+| Scoped runtime and journey routes | Per-stage capability refs exchanged by enrolled bots for short-lived scoped bearers; full agent tokens stay on retained internal management/exchange paths. |
 | Registry UI shell | CSP, no framing, nosniff, referrer policy. |
 | Protocol authoring internals | Skill/role checks in the registry store, not just hidden UI. |
 | Artifact paths | Safe path validation and workspace-root checks. |
@@ -1028,6 +1128,14 @@ Security boundaries in the current runtime:
 | Provider credentials | Credential store and provider auth mounts, not prompt-visible secrets. |
 | Bot workspace cleanup | Dry-run inventory persisted by the Registry, typed confirmation, bot-owned execution. |
 | Registry workspace reset | Password-confirmed operator reset of work records; not a file cleanup path. |
+
+Protocol runtime capability grants are role-sensitive. Normal production stages
+receive runtime start/read/fetch/event permissions. Contract-bearing acceptance
+stages may receive journey read/result permissions. Operator journey re-runs
+mint their own short-lived journey-run capability. The acceptance gate accepts a
+journey result only when it correlates with a Registry-issued `journey_requested`
+event for the current runtime instance and artifact snapshot; arbitrary
+`journey_completed` events are audit data, not acceptance proof.
 
 Current role model is simple and should not be overclaimed. `ProtocolAccessContextRecord`
 uses actor ref, org id, and roles such as admin, publisher, author, auditor,

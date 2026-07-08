@@ -39,3 +39,44 @@ jobs:
           tests/test_octopus_cli.py
           tests/test_octopus_cli_manager.py
           tests/test_registry_service.py::test_registry_openapi_asset_matches_generated_schema
+
+  registry-ui-e2e:
+    name: Registry UI / Playwright
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -c constraints.txt -r requirements.txt -r requirements-dev.txt
+
+      - name: Start registry
+        run: ./octopus start registry --yes
+
+      - name: Wait for registry
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8787/healthz >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8787/healthz
+
+      - name: Auto Protocol UI behavior
+        run: scripts/e2e/run_registry_playwright.sh
+
+      - name: Stop registry
+        if: always()
+        run: ./octopus stop registry --yes

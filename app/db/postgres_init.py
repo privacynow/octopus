@@ -59,6 +59,7 @@ def run_init(conn: Any) -> list[str]:
                 return [
                     "Database already contains Octopus schema objects that do not match the current build. "
                     "Reset the database volumes and rerun DB init.",
+                    f"Applying init.sql: {exc}",
                     *errors,
                 ]
         return [f"Applying init.sql: {exc}"]

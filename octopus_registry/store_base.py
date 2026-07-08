@@ -21,7 +21,6 @@ from octopus_sdk.registry.management import ManagementRequest, ManagementResult
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAutoDesignEventSummaryRecord,
-    ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolAccessContextRecord,
     ProtocolDefinitionDocumentRecord,
@@ -37,9 +36,13 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRunForkResultRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityExchangeResultRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     ProtocolScenarioRecord,
     ProtocolArtifactRecord,
     ProtocolArtifactSnapshotRecord,
@@ -389,7 +392,7 @@ def delivery_kinds_for_registry_scope(registry_scope: str) -> tuple[str, ...] | 
     if scope == "channel":
         return ("channel_input", "channel_action", "management_request")
     if scope == "coordination":
-        return ("routed_task", "routed_result")
+        return ("routed_task", "routed_result", "management_request")
     return None
 
 
@@ -907,14 +910,6 @@ class AbstractRegistryStore(Protocol):
     ) -> ProtocolDefinitionDiffRecord:
         """Return a unified diff between the current draft and the latest published version."""
 
-    def create_protocol_auto_design_session(
-        self,
-        payload: ProtocolAutoDesignRequestRecord,
-        *,
-        access: ProtocolAccessContextRecord,
-    ) -> ProtocolAutoDesignSessionRecord:
-        """Create a generated or revision Auto Protocol session."""
-
     def get_protocol_auto_design_session(
         self,
         session_id: str,
@@ -922,6 +917,16 @@ class AbstractRegistryStore(Protocol):
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
         """Return one Auto Protocol session visible to this actor."""
+
+    def list_protocol_auto_design_sessions(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        """Return recent Auto Protocol sessions visible to this actor."""
 
     def update_protocol_auto_design_session(
         self,
@@ -960,6 +965,16 @@ class AbstractRegistryStore(Protocol):
         idempotency_key: str = "",
     ) -> ProtocolRunMutationRecord:
         """Create a protocol run and dispatch its first stage."""
+
+    def fork_protocol_run_from_stage(
+        self,
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunForkResultRecord:
+        """Create a new protocol run from a selected stage boundary."""
 
     def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
         """Return one protocol run with participants, stages, artifacts, and transitions."""
@@ -1046,8 +1061,44 @@ class AbstractRegistryStore(Protocol):
         *,
         access: ProtocolAccessContextRecord,
         limit: int = 50,
+        event_kind: str | None = None,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         """Return runtime lifecycle/audit events for one artifact."""
+
+    def mint_runtime_capability_token(
+        self,
+        *,
+        protocol_run_id: str,
+        protocol_stage_execution_id: str,
+        artifact_key: str,
+        participant_key: str,
+        target_agent_id: str,
+        allowed_actions: list[str] | tuple[str, ...],
+        expires_at: str,
+        actor_ref: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord:
+        """Create a non-secret runtime capability reference for a protocol stage."""
+
+    def exchange_runtime_capability_token(
+        self,
+        *,
+        capability_ref: str,
+        target_agent_id: str,
+    ) -> ProtocolRuntimeCapabilityExchangeResultRecord:
+        """Exchange a non-secret capability reference for a short-lived bearer."""
+
+    def validate_runtime_capability_token(
+        self,
+        *,
+        bearer_token: str,
+        protocol_run_id: str,
+        artifact_key: str,
+        action: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord | None:
+        """Validate a scoped runtime bearer token."""
+
+    def revoke_runtime_capability_tokens_for_stage(self, protocol_stage_execution_id: str, *, reason: str = "") -> int:
+        """Revoke active scoped runtime bearers for a stage execution."""
 
     def export_protocol_run(
         self,

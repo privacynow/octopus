@@ -38,7 +38,13 @@ window.UI = (() => {
             const d = new Date(iso);
             const now = new Date();
             const sec = Math.floor((now - d) / 1000);
-            if (sec < 0) return 'just now';
+            if (sec < 0) {
+                const futureSec = Math.abs(sec);
+                if (futureSec < 60) return 'in less than a minute';
+                if (futureSec < 3600) return 'in ' + Math.floor(futureSec / 60) + 'm';
+                if (futureSec < 86400) return 'in ' + Math.floor(futureSec / 3600) + 'h';
+                return 'in ' + Math.floor(futureSec / 86400) + 'd';
+            }
             if (sec < 60) return 'just now';
             if (sec < 3600) return Math.floor(sec / 60) + 'm ago';
             if (sec < 86400) return Math.floor(sec / 3600) + 'h ago';
@@ -96,6 +102,8 @@ window.UI = (() => {
                 }
             });
             const next = `${url.pathname}${url.search}${url.hash}`;
+            const current = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+            if (next === current) return;
             if (replace) {
                 history.replaceState(null, '', next);
             } else {
@@ -419,6 +427,7 @@ window.UI = (() => {
             maxWidth = '560px',
             role = 'dialog',
             closeOnOverlay = true,
+            closeOnEscape = true,
             initialFocus = null,
         } = {},
     ) {
@@ -477,7 +486,7 @@ window.UI = (() => {
 
         function keyHandler(e) {
             if (e.key === 'Escape') {
-                close();
+                if (closeOnEscape) close();
                 return;
             }
             if (e.key !== 'Tab') return;
@@ -1539,6 +1548,17 @@ window.UI = (() => {
                 return (node.dataset && node.dataset.key) || node.id || undefined;
             },
             onBeforeElUpdated(fromEl, toEl) {
+                if (
+                    typeof HTMLDetailsElement !== 'undefined'
+                    && fromEl instanceof HTMLDetailsElement
+                    && toEl instanceof HTMLDetailsElement
+                    && fromEl.dataset
+                    && toEl.dataset
+                    && fromEl.dataset.disclosureKey
+                    && fromEl.dataset.disclosureKey === toEl.dataset.disclosureKey
+                ) {
+                    toEl.open = fromEl.open;
+                }
                 if (
                     fromEl instanceof Element
                     && toEl instanceof Element

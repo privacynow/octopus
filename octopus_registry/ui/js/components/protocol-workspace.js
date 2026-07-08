@@ -3,7 +3,10 @@ const PROTOCOL_ISSUE_FILTER_OPTIONS = [
     { value: 'all', label: 'All issues' },
     { value: 'blocked_run', label: 'Blocked runs' },
     { value: 'invalid_contract', label: 'Contract errors' },
-    { value: 'stuck_lease', label: 'Stuck leases' },
+    { value: 'stuck_lease', label: 'Expired write lease' },
+    { value: 'runtime_evidence_required', label: 'Runtime evidence' },
+    { value: 'operator_interrupted', label: 'Operator interrupted' },
+    { value: 'acceptance_contract_invalid', label: 'Invalid acceptance contract' },
     { value: 'expired_timeout', label: 'Expired timeouts' },
 ];
 
@@ -18,6 +21,9 @@ const PROTOCOL_RUN_VIEW_FILTER_OPTIONS = [
     { value: 'telegram', label: 'From Telegram' },
     { value: 'registry', label: 'From Registry' },
 ];
+
+const AUTO_PROTOCOL_ACTIVE_SESSION_KEY = 'octopus.protocolAuto.activeSessionId';
+let activeAutoProtocolSessionId = '';
 
 function _isCompactViewport() {
     return window.innerWidth <= 960;
@@ -51,13 +57,44 @@ function _downloadProtocolText(filename, text, contentType) {
 
 function _autoProtocolErrorMessage(label, err) {
     const detail = err && err.message ? err.message : String(err || 'Unknown error');
-    return detail && detail !== label ? `${label}: ${detail}` : label;
+    const code = String(err?.errorCode || '').trim();
+    const prefix = code ? `${label} [${code}]` : label;
+    return detail && detail !== label ? `${prefix}: ${detail}` : prefix;
 }
 
 function _autoProtocolErrorEl(label, err, retryFn) {
-    const card = UI.createErrorCard(_autoProtocolErrorMessage(label, err), retryFn);
+    const status = Number(err?.status || 0);
+    const code = String(err?.errorCode || '').trim().toUpperCase();
+    const retryable = Boolean(retryFn)
+        && (!status
+            || status === 408
+            || status === 429
+            || status >= 500
+            || (status === 409 && code === 'CONCURRENT_MODIFICATION'));
+    let retrying = false;
+    const retryOnce = retryable
+        ? async (event) => {
+            if (retrying) return;
+            retrying = true;
+            const target = event?.currentTarget;
+            if (target) target.disabled = true;
+            try {
+                await retryFn();
+            } finally {
+                retrying = false;
+                if (target?.isConnected) target.disabled = false;
+            }
+        }
+        : null;
+    const card = UI.createErrorCard(_autoProtocolErrorMessage(label, err), retryOnce);
     card.classList.add('protocol-auto-error');
     card.setAttribute('role', 'alert');
+    if (!retryable && Boolean(retryFn)) {
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'Retry will not change this condition. Refresh or resolve the requested action before trying again.';
+        card.appendChild(note);
+    }
     return card;
 }
 
@@ -67,11 +104,368 @@ function _setAutoProtocolStatus(status, message) {
 }
 
 function _setAutoProtocolDialogError(preview, status, label, err, retryFn) {
-    const message = _autoProtocolErrorMessage(label, err);
     status.className = 'quiet-note protocol-auto-error-note';
-    status.textContent = message;
+    status.textContent = 'The operation did not complete. Review the error details below.';
     UI.reconcileChildren(preview, [_autoProtocolErrorEl(label, err, retryFn)]);
     console.error(label, err);
+}
+
+function _autoProtocolPlanningError(err) {
+    const code = String(err?.errorCode || '').trim().toUpperCase();
+    return Number(err?.status) === 409 && code === 'PROTOCOL_AUTO_PLANNING';
+}
+
+function _rememberAutoProtocolSession(sessionId) {
+    const normalized = String(sessionId || '').trim();
+    try {
+        if (normalized) {
+            window.localStorage?.setItem(AUTO_PROTOCOL_ACTIVE_SESSION_KEY, normalized);
+        } else {
+            window.localStorage?.removeItem(AUTO_PROTOCOL_ACTIVE_SESSION_KEY);
+        }
+    } catch (err) {
+        void err;
+    }
+}
+
+function _rememberActiveAutoProtocolSession(session) {
+    const sessionId = String(session?.session_id || '').trim();
+    if (sessionId && _autoProtocolPlanning(session)) {
+        activeAutoProtocolSessionId = sessionId;
+        _rememberAutoProtocolSession(sessionId);
+        return;
+    }
+    if (!sessionId || sessionId === activeAutoProtocolSessionId || sessionId === _rememberedAutoProtocolSessionId()) {
+        activeAutoProtocolSessionId = '';
+        _rememberAutoProtocolSession('');
+    }
+}
+
+function _rememberedAutoProtocolSessionId() {
+    try {
+        return String(window.localStorage?.getItem(AUTO_PROTOCOL_ACTIVE_SESSION_KEY) || '').trim();
+    } catch (err) {
+        void err;
+        return '';
+    }
+}
+
+function _subscribeAutoProtocolSession(sessionId, onUpdate) {
+    const normalized = String(sessionId || '').trim();
+    if (!normalized || typeof WS === 'undefined' || !WS || typeof WS.subscribe !== 'function') {
+        return () => {};
+    }
+    let timer = null;
+    const unsubscribe = WS.subscribe(`protocol-auto-session:${normalized}`, () => {
+        clearTimeout(timer);
+        timer = window.setTimeout(async () => {
+            try {
+                const updated = await API.getProtocolAutoSession(normalized);
+                await onUpdate(updated);
+            } catch (err) {
+                console.warn('Failed to refresh Auto Protocol session after websocket update', err);
+            }
+        }, 250);
+    });
+    return () => {
+        clearTimeout(timer);
+        if (typeof unsubscribe === 'function') unsubscribe();
+    };
+}
+
+function _autoProtocolSleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function _autoProtocolPlanning(session) {
+    return String(session?.status || '') === 'planning';
+}
+
+function _autoProtocolErrorSessionId(err) {
+    const details = err?.details && typeof err.details === 'object' ? err.details : {};
+    const payloadDetail = err?.payload?.detail && typeof err.payload.detail === 'object'
+        ? err.payload.detail
+        : {};
+    return String(
+        details.session_id
+        || payloadDetail.session_id
+        || payloadDetail.details?.session_id
+        || '',
+    ).trim();
+}
+
+function _autoProtocolSelectedAgentLabel(session, catalog = []) {
+    const plannerState = session?.planner_state || {};
+    const selectedAgent = plannerState.selected_agent || {};
+    const agentId = String(
+        plannerState.selected_agent_id
+        || session?.planner_agent_id
+        || selectedAgent.agent_id
+        || '',
+    ).trim();
+    const unique = new Map();
+    (Array.isArray(catalog) ? catalog : []).forEach((agent) => {
+        const id = String(agent?.agent_id || '').trim();
+        if (id && !unique.has(id)) unique.set(id, agent);
+    });
+    const catalogAgent = agentId ? unique.get(agentId) : null;
+    return String(
+        plannerState.selected_agent_display_name
+        || selectedAgent.display_name
+        || selectedAgent.slug
+        || catalogAgent?.display_name
+        || catalogAgent?.slug
+        || agentId
+        || 'Auto-selecting planner',
+    ).trim();
+}
+
+function _autoProtocolTargetProtocolId(session) {
+    return String(
+        session?.target_protocol_id
+        || session?.applied_protocol?.protocol?.protocol_id
+        || session?.protocol?.protocol_id
+        || '',
+    ).trim();
+}
+
+function _autoProtocolPlannerAgentsFrom(agents = []) {
+    return (Array.isArray(agents) ? agents : []).filter((agent) =>
+        (Array.isArray(agent?.supported_admin_operations) ? agent.supported_admin_operations : [])
+            .some((operation) => String(operation || '').trim() === 'design_auto_protocol'));
+}
+
+function _populateAutoProtocolPlannerSelect(select, agents = []) {
+    if (!select) return;
+    const currentValue = String(select.value || '').trim();
+    select.disabled = false;
+    select.textContent = '';
+    const auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = 'Auto-select available planner';
+    select.appendChild(auto);
+    _autoProtocolPlannerAgentsFrom(agents).forEach((agent) => {
+        const option = document.createElement('option');
+        option.value = String(agent.agent_id || '');
+        option.textContent = UI.visibleLabel(agent.display_name, agent.slug || agent.agent_id, 'Agent');
+        select.appendChild(option);
+    });
+    if (currentValue && Array.from(select.options).some((option) => option.value === currentValue)) {
+        select.value = currentValue;
+    }
+}
+
+function _setAutoProtocolPlannerSelectLoading(select) {
+    if (!select) return;
+    select.disabled = true;
+    select.textContent = '';
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Loading planner agents...';
+    option.selected = true;
+    select.appendChild(option);
+}
+
+function _createAutoProtocolPlannerField(agents = [], { loading = false } = {}) {
+    const label = document.createElement('label');
+    label.className = 'kit-details-field';
+    const title = document.createElement('span');
+    title.className = 'kit-details-label';
+    title.textContent = 'Planner agent';
+    label.appendChild(title);
+    const select = document.createElement('select');
+    select.className = 'input';
+    select.setAttribute('aria-label', 'Planner agent');
+    if (loading) {
+        _setAutoProtocolPlannerSelectLoading(select);
+    } else {
+        _populateAutoProtocolPlannerSelect(select, agents);
+    }
+    label.appendChild(select);
+    const help = document.createElement('span');
+    help.className = 'kit-details-help';
+    help.textContent = 'Auto uses the planner queue and rotates across capable connected agents. Choose an agent only when you need to target one explicitly.';
+    label.appendChild(help);
+    return { element: label, select };
+}
+
+function _autoProtocolRunAttemptKey(sessionId) {
+    const normalized = String(sessionId || '').trim();
+    const uuid = window.crypto?.randomUUID ? window.crypto.randomUUID().replace(/-/g, '') : '';
+    const nonce = uuid || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+    return `auto-protocol-session:${normalized}:run:${nonce}`;
+}
+
+function _autoProtocolPlanningActionError(session = null) {
+    const err = new Error('Auto Protocol is still designing this session. Wait for planning to finish before applying, publishing, or running.');
+    err.status = 409;
+    err.errorCode = 'PROTOCOL_AUTO_PLANNING';
+    if (session?.session_id) {
+        err.session = session;
+    }
+    return err;
+}
+
+async function _autoProtocolRunAction(sessionId, action, { originChannel = 'registry' } = {}) {
+    const normalizedSessionId = String(sessionId || '').trim();
+    const normalizedAction = String(action || '').trim();
+    if (!normalizedSessionId) return null;
+    const latest = await API.getProtocolAutoSession(normalizedSessionId);
+    if (_autoProtocolPlanning(latest)) {
+        throw _autoProtocolPlanningActionError(latest);
+    }
+    if (normalizedAction === 'apply') {
+        return API.applyProtocolAutoSession(normalizedSessionId);
+    }
+    if (normalizedAction === 'publish') {
+        return API.publishProtocolAutoSession(normalizedSessionId);
+    }
+    if (normalizedAction === 'run') {
+        return API.runProtocolAutoSession(normalizedSessionId, {
+            origin_channel: originChannel,
+            idempotency_key: _autoProtocolRunAttemptKey(normalizedSessionId),
+        });
+    }
+    throw new Error(`Unsupported Auto Protocol action: ${normalizedAction || 'unknown'}`);
+}
+
+function _autoProtocolSessionSourceRunId(session) {
+    return String(session?.source_run_id || '').trim();
+}
+
+function _autoProtocolSessionMatchesRememberedContext(session, { mode = 'create', targetProtocolId = '', sourceRunId = '' } = {}) {
+    if (!session?.session_id) return false;
+    const expectedRunId = String(sourceRunId || '').trim();
+    const sessionRunId = _autoProtocolSessionSourceRunId(session);
+    if (expectedRunId) {
+        return sessionRunId === expectedRunId;
+    }
+    if (sessionRunId) return false;
+    const expectedProtocolId = String(targetProtocolId || '').trim();
+    const sessionProtocolId = _autoProtocolTargetProtocolId(session);
+    if (String(mode || '') === 'revise') {
+        return Boolean(expectedProtocolId && sessionProtocolId === expectedProtocolId);
+    }
+    return !sessionProtocolId;
+}
+
+function _setAutoProtocolButtonBusy(button, busy) {
+    if (!button) return;
+    if (busy) {
+        button.dataset.autoProtocolBusy = '1';
+        button.disabled = true;
+        return;
+    }
+    delete button.dataset.autoProtocolBusy;
+}
+
+function _setAutoProtocolButtonState(button, { visible = true, disabled = false } = {}) {
+    if (!button) return;
+    const shown = Boolean(visible);
+    button.hidden = !shown;
+    if (!shown) {
+        button.disabled = true;
+        button.tabIndex = -1;
+        button.setAttribute('aria-hidden', 'true');
+        return;
+    }
+    button.removeAttribute('aria-hidden');
+    button.removeAttribute('tabindex');
+    button.disabled = button.dataset.autoProtocolBusy === '1' || Boolean(disabled);
+}
+
+function _autoProtocolHasDraft(session) {
+    const draft = session?.draft_definition_json || {};
+    return Boolean(draft.metadata && Array.isArray(draft.stages));
+}
+
+function _autoProtocolFinishedMessage(session, readyMessage) {
+    const status = String(session?.status || '');
+    if (status === 'failed') return 'Planning failed. Review the details below, adjust the request, and retry.';
+    if (status === 'blocked') return 'Planning finished with blockers. Review the required decisions before publishing or running.';
+    return readyMessage;
+}
+
+function _autoProtocolPlannerFact(label, value) {
+    const row = document.createElement('div');
+    row.className = 'kit-details-row';
+    const key = document.createElement('div');
+    key.className = 'kit-details-label';
+    key.textContent = label;
+    const val = document.createElement('div');
+    val.className = 'kit-artifact-guide-fact-value';
+    val.textContent = value || 'Not recorded';
+    row.appendChild(key);
+    row.appendChild(val);
+    return row;
+}
+
+function _autoProtocolProgressEl(session = null) {
+    const plannerState = session?.planner_state || {};
+    const promptDiagnostics = session?.prompt_diagnostics || {};
+    const panel = document.createElement('div');
+    panel.className = 'protocol-auto-progress';
+    const title = document.createElement('strong');
+    title.textContent = 'Designing the protocol';
+    panel.appendChild(title);
+    const note = document.createElement('p');
+    const state = String(plannerState.planner_status || session?.status || 'planning').replace(/_/g, ' ');
+    const quiet = plannerState.last_progress_at
+        ? ` Last progress ${UI.relativeTime(plannerState.last_progress_at)}.`
+        : '';
+    note.textContent = `Planner state: ${state}.${quiet} Heavy design and revision inputs can take tens of minutes; the planner is kept queued and observable instead of timing out the UI.`;
+    panel.appendChild(note);
+    const facts = document.createElement('div');
+    facts.className = 'kit-details-grid';
+    facts.appendChild(_autoProtocolPlannerFact('Planner agent', _autoProtocolSelectedAgentLabel(session)));
+    if (session?.planner_policy) {
+        facts.appendChild(_autoProtocolPlannerFact('Planner policy', String(session.planner_policy).replace(/_/g, ' ')));
+    }
+    if (session?.planner_task_id || session?.planner_request_id) {
+        facts.appendChild(_autoProtocolPlannerFact('Planner job', session.planner_task_id || session.planner_request_id));
+    }
+    if (plannerState.started_at) {
+        facts.appendChild(_autoProtocolPlannerFact('Started', UI.relativeTime(plannerState.started_at)));
+    }
+    if (plannerState.last_progress_at) {
+        facts.appendChild(_autoProtocolPlannerFact('Last progress', UI.relativeTime(plannerState.last_progress_at)));
+    }
+    if (plannerState.timeout_at) {
+        facts.appendChild(_autoProtocolPlannerFact('Timeout', UI.relativeTime(plannerState.timeout_at)));
+    }
+    if (promptDiagnostics.large_input) {
+        facts.appendChild(_autoProtocolPlannerFact('Input size', 'Large design input'));
+    }
+    if (Number.isFinite(Number(promptDiagnostics.requirement_chars))) {
+        facts.appendChild(_autoProtocolPlannerFact('Requirement', `${Number(promptDiagnostics.requirement_chars).toLocaleString()} chars`));
+    }
+    if (Number.isFinite(Number(promptDiagnostics.source_document_chars)) && Number(promptDiagnostics.source_document_chars) > 0) {
+        facts.appendChild(_autoProtocolPlannerFact('Source draft', `${Number(promptDiagnostics.source_document_chars).toLocaleString()} chars`));
+    }
+    if (Number.isFinite(Number(promptDiagnostics.lesson_count)) && Number(promptDiagnostics.lesson_count) > 0) {
+        facts.appendChild(_autoProtocolPlannerFact('Lessons', String(Number(promptDiagnostics.lesson_count))));
+    }
+    panel.appendChild(facts);
+    const progressText = String(plannerState.progress_summary || '').trim();
+    if (progressText) {
+        const progress = document.createElement('p');
+        progress.className = 'quiet-note';
+        progress.textContent = progressText;
+        panel.appendChild(progress);
+    }
+    const steps = document.createElement('ol');
+    [
+        'Analyze the requested outcome',
+        'Design work packages and review gates',
+        'Compile a normal protocol draft',
+        'Validate readiness and assignment blockers',
+    ].forEach((label) => {
+        const item = document.createElement('li');
+        item.textContent = label;
+        steps.appendChild(item);
+    });
+    panel.appendChild(steps);
+    return panel;
 }
 
 function _protocolArtifactLabel(item) {
@@ -91,6 +485,13 @@ function _protocolRunTaskHref(runId, routedTaskId) {
     if (routedTaskId) params.set('task_id', String(routedTaskId));
     const query = params.toString();
     return query ? `/ui/tasks?${query}` : '/ui/tasks';
+}
+
+function _protocolRunHref(runId) {
+    const params = new URLSearchParams();
+    if (runId) params.set('run_id', String(runId));
+    const query = params.toString();
+    return query ? `/ui/runs?${query}` : '/ui/runs';
 }
 
 function _protocolArtifactDisplayPath(item) {
@@ -176,6 +577,18 @@ async function _artifactRuntimeSnapshot(runId, artifactKey) {
         browseUrl: status?.browse_url || '',
         events: Array.isArray(events?.items) ? events.items : [],
     };
+}
+
+function _contractJourneyKeysForArtifact(artifactKey) {
+    const key = String(artifactKey || '').trim();
+    const autoMeta = currentRun?.version?.definition_json?.metadata?.auto_protocol || {};
+    const primaryKey = String(autoMeta.primary_artifact?.artifact_key || autoMeta.primary_artifact_key || '').trim();
+    if (primaryKey && key && primaryKey !== key) return [];
+    const contract = autoMeta.acceptance_contract || {};
+    const journeys = Array.isArray(contract.required_journeys) ? contract.required_journeys : [];
+    return journeys
+        .map((item) => String(item?.journey_key || '').trim())
+        .filter(Boolean);
 }
 
 function _renderArtifactRuntimeDialogBody({
@@ -308,6 +721,10 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     logsBtn.type = 'button';
     logsBtn.className = 'btn';
     logsBtn.textContent = 'Logs';
+    const journeyBtn = document.createElement('button');
+    journeyBtn.type = 'button';
+    journeyBtn.className = 'btn';
+    journeyBtn.textContent = 'Re-run journeys';
     const startBtn = document.createElement('button');
     startBtn.type = 'button';
     startBtn.className = 'btn btn-primary';
@@ -330,13 +747,13 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
     deleteBtn.type = 'button';
     deleteBtn.className = 'btn btn-danger';
     deleteBtn.textContent = 'Delete';
-    for (const action of [startBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn]) {
+    for (const action of [startBtn, healthBtn, logsBtn, journeyBtn, stopBtn, archiveBtn, deleteBtn]) {
         action.hidden = true;
     }
     openBtn.hidden = true;
 
     const view = UI.showDialog(`Runtime: ${artifactLabel || artifactKey}`, body, {
-        actions: [startBtn, openBtn, healthBtn, logsBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
+        actions: [startBtn, openBtn, healthBtn, logsBtn, journeyBtn, stopBtn, archiveBtn, deleteBtn, closeBtn],
         maxWidth: '820px',
     });
 
@@ -390,6 +807,7 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
         stopBtn.hidden = !['running', 'starting'].includes(status);
         healthBtn.hidden = !manifestAvailable || !['running', 'starting'].includes(status);
         logsBtn.hidden = !manifestAvailable;
+        journeyBtn.hidden = !_contractJourneyKeysForArtifact(artifactKey).length || !['running', 'starting'].includes(status);
         archiveBtn.hidden = !manifestAvailable || status === 'running';
         deleteBtn.hidden = !manifestAvailable || status === 'running';
         if (!runtimeNeedsPolling()) stopAutoPoll();
@@ -427,6 +845,25 @@ async function _openArtifactRuntimeDialog(runId, artifactKey, artifactLabel = ''
 
     healthBtn.addEventListener('click', () => void refresh({ health: true }));
     logsBtn.addEventListener('click', () => void refresh({ logs: true }));
+    journeyBtn.addEventListener('click', async () => {
+        const journeys = _contractJourneyKeysForArtifact(artifactKey);
+        if (!journeys.length) {
+            UI.notify('This artifact has no declared runtime journeys.', 'warning');
+            return;
+        }
+        journeyBtn.disabled = true;
+        try {
+            for (const journeyKey of journeys) {
+                await API.runProtocolRunArtifactRuntimeJourney(runId, artifactKey, journeyKey);
+            }
+            UI.notify(`${journeys.length} journey${journeys.length === 1 ? '' : 'ies'} queued. Results will appear in runtime events.`, 'success');
+            await refresh();
+        } catch (err) {
+            UI.reportError('Failed to queue runtime journey', err, { context: 'Artifact runtime journey failed' });
+        } finally {
+            journeyBtn.disabled = false;
+        }
+    });
     startBtn.addEventListener('click', async () => {
         startBtn.disabled = true;
         try {
@@ -962,10 +1399,12 @@ function _protocolEventKindLabel(value) {
         'protocol.run.send_back': 'Operator sent back',
         'protocol.run.cancel': 'Run cancelled',
         'protocol.run.retry': 'Run retried',
+        'protocol.run.interrupt': 'Stage interrupted',
         operator_accept: 'Operator accepted',
         operator_send_back: 'Operator sent back',
         operator_cancel: 'Run cancelled',
         operator_retry: 'Run retried',
+        operator_interrupt: 'Stage interrupted',
     };
     if (labels[normalized]) return labels[normalized];
     return _titleCaseWords(normalized.replace(/[._]+/g, ' ')) || 'Runtime event';
@@ -996,6 +1435,7 @@ function _protocolEventText(event) {
  */
 function renderProtocolWorkspace(container) {
     const cleanups = UI.beginCleanupScope();
+    const designSessionsRoute = window.location.pathname === '/ui/design-sessions';
     const contentInner = container.closest('.content-inner');
     if (contentInner) {
         contentInner.classList.add('workspace-route-wide');
@@ -1005,7 +1445,22 @@ function renderProtocolWorkspace(container) {
     let protocols = [];
     let authoringOptions = null;
     let protocolTemplates = [];
-    let currentProtocolId = UI.readQueryParam('protocol_id', '');
+    let autoProtocolSessions = [];
+    let autoProtocolSessionsLoading = false;
+    let autoProtocolSessionsNextCursor = null;
+    let autoProtocolStatusFilter = designSessionsRoute ? String(UI.readQueryParam('status', '') || '').trim() : '';
+    let autoProtocolCursor = designSessionsRoute ? Math.max(0, Number.parseInt(UI.readQueryParam('cursor', '0'), 10) || 0) : 0;
+    let selectedAutoProtocolSessionId = designSessionsRoute
+        ? String(UI.readQueryParam('session_id', '') || _rememberedAutoProtocolSessionId()).trim()
+        : '';
+    let selectedAutoProtocolSession = null;
+    let selectedAutoProtocolEvents = [];
+    let autoProtocolDetailLoading = false;
+    let autoProtocolQueueActionError = null;
+    let autoProtocolQueueRetryAction = '';
+    let autoProtocolQueueActionInFlight = '';
+    let selectedAutoProtocolSubscription = null;
+    let currentProtocolId = designSessionsRoute ? '' : UI.readQueryParam('protocol_id', '');
     let templateChooserMode = String(UI.readQueryParam('new', '') || '').trim().toLowerCase() === 'template' ? 'template' : '';
     let includeGeneratedCatalog = UI.readQueryParam('include_generated', '') === '1';
     let currentProtocol = null;
@@ -2190,6 +2645,21 @@ function renderProtocolWorkspace(container) {
     }
 
     function _writeState({ push = false } = {}) {
+        if (designSessionsRoute) {
+            UI.updateQueryParams({
+                session_id: selectedAutoProtocolSessionId || '',
+                status: autoProtocolStatusFilter || '',
+                cursor: autoProtocolCursor > 0 ? autoProtocolCursor : '',
+                protocol_id: '',
+                new: '',
+                run_id: '',
+                issue_kind: '',
+                entry_agent_id: '',
+                protocol_view: '',
+                include_generated: '',
+            }, { replace: !push });
+            return;
+        }
         UI.updateQueryParams({
             protocol_id: currentProtocolId || '',
             new: !currentProtocolId && templateChooserMode === 'template' && protocolTemplates.length ? 'template' : '',
@@ -2739,8 +3209,10 @@ function renderProtocolWorkspace(container) {
             `${reviewCount} reviews`,
             `${stagesForSummary.length} stages`,
             `${artifactsForSummary.length} artifacts`,
+            plan.contract_required ? 'Full product/system contract' : 'Lightweight contract',
+            String(plan.product_class || '').trim() ? `Product class: ${plan.product_class}` : '',
             validation.ok ? 'Validation ready' : 'Validation needs attention',
-        ].forEach((label) => {
+        ].filter(Boolean).forEach((label) => {
             const item = document.createElement('span');
             item.className = 'kit-catalog-card-meta-item';
             item.textContent = label;
@@ -2841,30 +3313,6 @@ function renderProtocolWorkspace(container) {
         return panel;
     }
 
-    function _autoProtocolProgressEl() {
-        const panel = document.createElement('div');
-        panel.className = 'protocol-auto-progress';
-        const title = document.createElement('strong');
-        title.textContent = 'Designing the protocol';
-        panel.appendChild(title);
-        const note = document.createElement('p');
-        note.textContent = 'The planner is analyzing the requirement, shaping work packages, adding review gates, and validating the draft before it is shown.';
-        panel.appendChild(note);
-        const steps = document.createElement('ol');
-        [
-            'Analyze the requested outcome',
-            'Design work packages and review gates',
-            'Compile a normal protocol draft',
-            'Validate readiness and assignment blockers',
-        ].forEach((label) => {
-            const item = document.createElement('li');
-            item.textContent = label;
-            steps.appendChild(item);
-        });
-        panel.appendChild(steps);
-        return panel;
-    }
-
     function _autoProtocolReady(session) {
         const validation = session?.validation || {};
         const unresolved = Array.isArray(session?.unresolved_decisions) ? session.unresolved_decisions : [];
@@ -2876,12 +3324,12 @@ function renderProtocolWorkspace(container) {
     }
 
     async function _adoptAutoProtocolSession(session, { push = true } = {}) {
-        const protocolId = String(
-            session?.target_protocol_id
-            || session?.applied_protocol?.protocol?.protocol_id
-            || '',
-        ).trim();
+        const protocolId = _autoProtocolTargetProtocolId(session);
         if (!protocolId) return false;
+        if (designSessionsRoute) {
+            Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);
+            return true;
+        }
         currentProtocolId = protocolId;
         templateChooserMode = '';
         currentProtocol = null;
@@ -2892,7 +3340,7 @@ function renderProtocolWorkspace(container) {
         return true;
     }
 
-    function _openAutoProtocolDialog({ mode = 'create' } = {}) {
+    function _openAutoProtocolDialog({ mode = 'create', sessionId = '', ignoreRememberedSession = false } = {}) {
         const isRevision = mode === 'revise' && currentProtocolId;
         const form = document.createElement('div');
         form.className = 'protocol-package-dialog protocol-auto-dialog';
@@ -2915,6 +3363,8 @@ function renderProtocolWorkspace(container) {
             relation: 'context',
         });
         form.appendChild(resourcePicker.element);
+        const plannerField = _createAutoProtocolPlannerField(_availableAuthoringAgents());
+        form.appendChild(plannerField.element);
         const status = document.createElement('p');
         status.className = 'quiet-note';
         status.textContent = 'Generated output becomes a normal editable protocol draft.';
@@ -2965,47 +3415,166 @@ function renderProtocolWorkspace(container) {
         runBtn.className = 'btn btn-primary';
         runBtn.textContent = 'Publish & Run';
         runBtn.hidden = true;
+        const queueBtn = document.createElement('button');
+        queueBtn.type = 'button';
+        queueBtn.className = 'btn';
+        queueBtn.textContent = 'View in queue';
+        queueBtn.hidden = true;
         const view = UI.showDialog(isRevision ? 'Improve with Auto Protocol' : 'Auto protocol', form, {
-            actions: [cancelBtn, generateBtn, reviseBtn, applyBtn, publishBtn, runBtn],
+            actions: [cancelBtn, generateBtn, reviseBtn, applyBtn, publishBtn, runBtn, queueBtn],
             maxWidth: '760px',
             initialFocus: requirement,
             closeOnOverlay: false,
+            closeOnEscape: false,
         });
         view.dialog.classList.add('protocol-auto-modal');
+        let sessionSubscription = null;
+        let planningWaitSeq = 0;
+        const originalClose = view.close;
+        view.close = () => {
+            if (sessionSubscription) {
+                sessionSubscription();
+                sessionSubscription = null;
+            }
+            originalClose();
+        };
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
+            const planning = _autoProtocolPlanning(session);
+            const hasDraft = _autoProtocolHasDraft(session);
+            const actionable = hasSession && !planning && hasDraft;
             const ready = _autoProtocolReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession;
-            reviseBtn.hidden = !hasSession;
-            applyBtn.hidden = !hasSession;
-            publishBtn.hidden = !hasSession;
-            runBtn.hidden = !hasSession;
-            reviseWrap.hidden = !hasSession;
-            revise.hidden = !hasSession;
-            reviseBtn.disabled = !hasSession || !revise.value.trim();
-            publishBtn.disabled = !ready;
-            runBtn.disabled = !ready;
-            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            _setAutoProtocolButtonState(generateBtn, { visible: !(hasSession && (planning || hasDraft)) });
+            _setAutoProtocolButtonState(reviseBtn, { visible: actionable, disabled: !actionable || !revise.value.trim() });
+            _setAutoProtocolButtonState(applyBtn, { visible: actionable });
+            _setAutoProtocolButtonState(publishBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(runBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(queueBtn, { visible: hasSession });
+            reviseWrap.hidden = !actionable;
+            revise.hidden = !actionable;
+            applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
             applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
             publishBtn.style.order = hasSession ? '2' : '';
             reviseBtn.style.order = hasSession ? '3' : '';
-            cancelBtn.style.order = hasSession ? '4' : '';
+            queueBtn.style.order = hasSession ? '4' : '';
+            cancelBtn.style.order = hasSession ? '5' : '';
             const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
             publishBtn.title = gateTitle;
             runBtn.title = gateTitle;
         };
+        const renderSessionState = (nextSession, { progressMessage = 'Designing protocol…', readyMessage = 'Review the generated structure. Apply it to continue in the normal editor.' } = {}) => {
+            session = nextSession;
+            if (session?.session_id) {
+                _rememberActiveAutoProtocolSession(session);
+                if (designSessionsRoute) {
+                    selectedAutoProtocolSessionId = String(session.session_id || '');
+                    selectedAutoProtocolSession = session;
+                    const listChanged = _mergeAutoProtocolSessionIntoList(session);
+                    _writeState({ push: true });
+                    if (listChanged) render();
+                }
+            }
+            if (_autoProtocolPlanning(session)) {
+                _setAutoProtocolStatus(status, progressMessage);
+                UI.reconcileChildren(preview, [_autoProtocolProgressEl(session)]);
+            } else if (session?.session_id) {
+                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                _setAutoProtocolStatus(status, _autoProtocolFinishedMessage(session, readyMessage));
+            }
+            syncActions();
+        };
+        const subscribeToSession = () => {
+            if (sessionSubscription) {
+                sessionSubscription();
+                sessionSubscription = null;
+            }
+            if (!session?.session_id || !_autoProtocolPlanning(session)) return;
+            sessionSubscription = _subscribeAutoProtocolSession(session.session_id, async (updated) => {
+                if (!view.dialog.isConnected) return;
+                renderSessionState(updated);
+            });
+        };
+        const refreshSessionState = async (options = {}) => {
+            if (!session?.session_id) return null;
+            const updated = await API.getProtocolAutoSession(session.session_id);
+            renderSessionState(updated, options);
+            subscribeToSession();
+            return session;
+        };
+        const attachSession = async (sessionId, options = {}) => {
+            const id = String(sessionId || '').trim();
+            if (!id) return null;
+            const updated = await API.getProtocolAutoSession(id);
+            if (options.requirePlanning && !_autoProtocolPlanning(updated)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
+            }
+            if (options.rememberedContext && !_autoProtocolSessionMatchesRememberedContext(updated, options.rememberedContext)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
+            }
+            renderSessionState(updated, options);
+            subscribeToSession();
+            return session;
+        };
+        const waitForPlanning = async (options = {}) => {
+            const seq = ++planningWaitSeq;
+            subscribeToSession();
+            let current = session;
+            let polls = 0;
+            while (_autoProtocolPlanning(current) && view.dialog.isConnected && seq === planningWaitSeq) {
+                await _autoProtocolSleep(sessionSubscription ? 30000 : Math.min(10000, polls < 10 ? 3000 : 5000));
+                if (!view.dialog.isConnected || seq !== planningWaitSeq) return session;
+                current = await API.getProtocolAutoSession(current.session_id);
+                renderSessionState(current, options);
+                subscribeToSession();
+                polls += 1;
+            }
+            return session;
+        };
+        const handlePlanningError = async (err, options = {}) => {
+            if (!_autoProtocolPlanningError(err)) return false;
+            try {
+                await refreshSessionState(options);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh Auto Protocol session after planning error', refreshErr);
+            }
+            UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
+            return true;
+        };
         revise.addEventListener('input', syncActions);
         cancelBtn.addEventListener('click', () => view.close());
-        generateBtn.addEventListener('click', async () => {
+        queueBtn.addEventListener('click', () => {
+            if (!session?.session_id) return;
+            view.close();
+            Router.navigate(`/ui/design-sessions?session_id=${encodeURIComponent(session.session_id)}`);
+        });
+        const explicitSessionId = String(sessionId || '').trim();
+        const implicitSessionId = ignoreRememberedSession ? '' : (activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId());
+        const rememberedSessionId = explicitSessionId || implicitSessionId;
+        if (rememberedSessionId) {
+            void attachSession(rememberedSessionId, {
+                requirePlanning: !explicitSessionId,
+                rememberedContext: explicitSessionId
+                    ? null
+                    : {
+                        mode: isRevision ? 'revise' : 'create',
+                        targetProtocolId: isRevision ? currentProtocolId : '',
+                    },
+            }).catch((err) => {
+                console.warn('Could not reattach Auto Protocol session', err);
+            });
+        }
+        const runGenerate = async () => {
             const text = requirement.value.trim();
             if (!text) {
                 status.textContent = 'Describe what the protocol should accomplish.';
                 return;
             }
-            generateBtn.disabled = true;
+            _setAutoProtocolButtonBusy(generateBtn, true);
             _setAutoProtocolStatus(status, 'Designing protocol…');
             UI.reconcileChildren(preview, [_autoProtocolProgressEl()]);
             try {
@@ -3017,18 +3586,39 @@ function renderProtocolWorkspace(container) {
                     constraints_text: constraints.value.trim(),
                     resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: '',
+                    preferred_design_agent_id: plannerField.select.value,
                 });
-                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Review the generated structure. Apply it to continue in the normal editor.');
+                renderSessionState(session, { progressMessage: 'Designing protocol…' });
+                if (_autoProtocolPlanning(session)) {
+                    await waitForPlanning({
+                        progressMessage: 'Designing protocol…',
+                        readyMessage: 'Review the generated structure. Apply it to continue in the normal editor.',
+                    });
+                } else {
+                    renderSessionState(session, { readyMessage: 'Review the generated structure. Apply it to continue in the normal editor.' });
+                }
                 syncActions();
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to generate protocol', err, () => generateBtn.click());
+                const attachedSessionId = _autoProtocolErrorSessionId(err);
+                if (attachedSessionId) {
+                    try {
+                        await attachSession(attachedSessionId);
+                    } catch (attachErr) {
+                        console.warn('Could not attach partially-created Auto Protocol session', attachErr);
+                    }
+                }
+                const retry = (session?.session_id || attachedSessionId)
+                    ? () => refreshSessionState()
+                    : () => runGenerate();
+                _setAutoProtocolDialogError(preview, status, 'Failed to generate protocol', err, retry);
             }
-            generateBtn.disabled = false;
-        });
-        reviseBtn.addEventListener('click', async () => {
+            _setAutoProtocolButtonBusy(generateBtn, false);
+            syncActions();
+        };
+        generateBtn.addEventListener('click', () => void runGenerate());
+        const runRevise = async () => {
             if (!session?.session_id || !revise.value.trim()) return;
-            reviseBtn.disabled = true;
+            _setAutoProtocolButtonBusy(reviseBtn, true);
             _setAutoProtocolStatus(status, 'Updating generated protocol…');
             try {
                 session = await API.reviseProtocolAutoSession(session.session_id, {
@@ -3038,22 +3628,43 @@ function renderProtocolWorkspace(container) {
                     requirement_text: revise.value.trim(),
                     constraints_text: constraints.value.trim(),
                     resource_refs: resourcePicker.resourceRefs(),
+                    preferred_design_agent_id: plannerField.select.value,
                 });
-                UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
+                renderSessionState(session, { progressMessage: 'Updating generated protocol…' });
+                if (_autoProtocolPlanning(session)) {
+                    await waitForPlanning({
+                        progressMessage: 'Updating generated protocol…',
+                        readyMessage: 'Updated. Review the changes, then apply the draft.',
+                    });
+                } else {
+                    renderSessionState(session, { readyMessage: 'Updated. Review the changes, then apply the draft.' });
+                }
                 revise.value = '';
-                _setAutoProtocolStatus(status, 'Updated. Review the changes, then apply the draft.');
                 syncActions();
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to modify generated protocol', err, () => reviseBtn.click());
+                const attachedSessionId = _autoProtocolErrorSessionId(err);
+                if (attachedSessionId) {
+                    try {
+                        await attachSession(attachedSessionId, { progressMessage: 'Updating generated protocol…', readyMessage: 'Updated. Review the changes, then apply the draft.' });
+                    } catch (attachErr) {
+                        console.warn('Could not attach partially-revised Auto Protocol session', attachErr);
+                    }
+                }
+                const retry = (session?.session_id || attachedSessionId)
+                    ? () => refreshSessionState({ progressMessage: 'Updating generated protocol…', readyMessage: 'Updated. Review the changes, then apply the draft.' })
+                    : () => runRevise();
+                _setAutoProtocolDialogError(preview, status, 'Failed to modify generated protocol', err, retry);
             }
-            reviseBtn.disabled = false;
-        });
-        applyBtn.addEventListener('click', async () => {
+            _setAutoProtocolButtonBusy(reviseBtn, false);
+            syncActions();
+        };
+        reviseBtn.addEventListener('click', () => void runRevise());
+        const runApply = async () => {
             if (!session?.session_id) return;
-            applyBtn.disabled = true;
+            _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying generated draft…');
             try {
-                const applied = await API.applyProtocolAutoSession(session.session_id);
+                const applied = await _autoProtocolRunAction(session.session_id, 'apply');
                 session = applied;
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 if (await _adoptAutoProtocolSession(applied)) {
@@ -3063,33 +3674,46 @@ function renderProtocolWorkspace(container) {
                 }
                 _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to apply generated protocol', err, () => applyBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(applyBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to apply generated protocol', err, () => runApply());
             }
-            applyBtn.disabled = false;
-        });
-        publishBtn.addEventListener('click', async () => {
+            _setAutoProtocolButtonBusy(applyBtn, false);
+            syncActions();
+        };
+        applyBtn.addEventListener('click', () => void runApply());
+        const runPublish = async () => {
             if (!session?.session_id) return;
-            publishBtn.disabled = true;
+            _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing generated protocol…');
             try {
-                session = await API.publishProtocolAutoSession(session.session_id);
+                session = await _autoProtocolRunAction(session.session_id, 'publish');
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
                 _setAutoProtocolStatus(status, 'Published. You can run it now or continue editing a draft revision later.');
                 UI.notify('Auto Protocol published.', 'success');
                 syncActions();
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to publish generated protocol', err, () => publishBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(publishBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to publish generated protocol', err, () => runPublish());
             }
-            publishBtn.disabled = false;
+            _setAutoProtocolButtonBusy(publishBtn, false);
             syncActions();
-        });
-        runBtn.addEventListener('click', async () => {
+        };
+        publishBtn.addEventListener('click', () => void runPublish());
+        const runStart = async () => {
             if (!session?.session_id) return;
-            runBtn.disabled = true;
+            _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting the run…');
             try {
-                session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
+                session = await _autoProtocolRunAction(session.session_id, 'run');
                 UI.reconcileChildren(preview, [_autoProtocolSummaryEl(session)]);
                 await _adoptAutoProtocolSession(session);
                 const runId = _autoProtocolRunId(session);
@@ -3101,11 +3725,17 @@ function renderProtocolWorkspace(container) {
                 }
                 UI.notify('Protocol run started, but no run id was returned.', 'success');
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to run generated protocol', err, () => runBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(runBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to run generated protocol', err, () => runStart());
             }
-            runBtn.disabled = false;
+            _setAutoProtocolButtonBusy(runBtn, false);
             syncActions();
-        });
+        };
+        runBtn.addEventListener('click', () => void runStart());
         syncActions();
     }
 
@@ -7652,7 +8282,7 @@ function renderProtocolWorkspace(container) {
         auto.type = 'button';
         auto.className = 'btn';
         auto.textContent = 'Auto protocol';
-        auto.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create' }));
+        auto.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', ignoreRememberedSession: true }));
         actions.appendChild(auto);
         const cancel = document.createElement('button');
         cancel.type = 'button';
@@ -7720,10 +8350,437 @@ function renderProtocolWorkspace(container) {
         return shell;
     }
 
+    function _autoProtocolSessionStatusLabel(session) {
+        const status = String(session?.status || '').trim().toLowerCase();
+        const taskStatus = String(session?.planner_state?.planner_status || '').trim().toLowerCase();
+        if (status === 'planning') return taskStatus ? `Planning · ${taskStatus.replace(/_/g, ' ')}` : 'Planning';
+        if (status === 'ready') return 'Ready to review';
+        if (status === 'applied') return 'Draft applied';
+        if (status === 'published') return 'Published';
+        if (status === 'running') return 'Run started';
+        if (status === 'blocked') return 'Blocked';
+        if (status === 'failed') return 'Failed';
+        return status ? _titleCaseWords(status.replace(/_/g, ' ')) : 'Unknown';
+    }
+
+    function _autoProtocolSessionStatusBadgeClass(session) {
+        const status = String(session?.status || '').trim().toLowerCase();
+        const taskStatus = String(session?.planner_state?.planner_status || '').trim().toLowerCase();
+        if (status === 'planning') {
+            if (taskStatus === 'queued') return 'badge-queued';
+            if (taskStatus === 'cancelled' || taskStatus === 'canceled') return 'badge-cancelled';
+            if (taskStatus === 'failed' || taskStatus === 'timed_out') return 'badge-failed';
+            return 'badge-running';
+        }
+        if (status === 'ready' || status === 'applied' || status === 'published' || status === 'running') return 'badge-connected';
+        if (status === 'blocked') return 'badge-degraded';
+        if (status === 'failed') return 'badge-failed';
+        if (status === 'cancelled' || status === 'canceled') return 'badge-cancelled';
+        return 'badge-open';
+    }
+
+    function _autoProtocolSessionTitle(session) {
+        const plan = session?.plan || {};
+        const analysis = session?.analysis || {};
+        return String(
+            plan.protocol_name
+            || analysis.focus
+            || session?.requirement_text
+            || 'Auto Protocol design',
+        ).replace(/\s+/g, ' ').trim();
+    }
+
+    function _autoProtocolSessionAgentLabel(session) {
+        return _autoProtocolSelectedAgentLabel(session, [
+            ..._availableAuthoringAgents(),
+            ..._authoringAssignableAgents(),
+        ]);
+    }
+
+    function _autoProtocolSessionBody(session) {
+        const plannerState = session?.planner_state || {};
+        const progress = String(plannerState.progress_summary || '').trim();
+        if (progress) return progress;
+        const status = String(session?.status || '').trim().toLowerCase();
+        if (status === 'planning') return 'Planner work is in progress and will keep updating this design session.';
+        if (status === 'ready') return 'Generated draft is ready for review before applying, publishing, or running.';
+        if (status === 'applied') return 'Generated draft has been applied to the protocol catalog.';
+        if (status === 'published') return 'Generated protocol has been published.';
+        if (status === 'running') return 'Generated protocol was published and a run has been started.';
+        if (status === 'blocked') return 'Design session needs operator review before it can move forward.';
+        if (status === 'failed') return String(session?.error_message || 'Planner failed before producing a usable protocol draft.');
+        if (session?.planner_task_id) return `Planner job ${session.planner_task_id}`;
+        return 'Auto Protocol design session.';
+    }
+
+    function _autoProtocolSessionCard(session, { onOpen = null, selected = false } = {}) {
+        const sessionId = String(session?.session_id || '');
+        const item = document.createElement('li');
+        item.className = 'kit-catalog-item';
+        item.dataset.key = `auto-protocol-session:${sessionId || 'unknown'}`;
+
+        const card = document.createElement('button');
+        card.type = 'button';
+        card.className = 'kit-catalog-card protocol-auto-session-card';
+        card.dataset.key = `auto-protocol-session-card:${sessionId || 'unknown'}`;
+        if (selected) card.classList.add('selected');
+        card.dataset.autoProtocolSessionId = sessionId;
+        card.addEventListener('click', () => {
+            if (typeof onOpen === 'function') {
+                onOpen(session);
+                return;
+            }
+            _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id });
+        });
+
+        const top = document.createElement('div');
+        top.className = 'kit-catalog-card-top';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-card-copy';
+        const title = document.createElement('div');
+        title.className = 'kit-catalog-card-title';
+        const titleText = _autoProtocolSessionTitle(session);
+        title.textContent = titleText.length > 100 ? `${titleText.slice(0, 97).trim()}...` : titleText;
+        copy.appendChild(title);
+        const slug = document.createElement('div');
+        slug.className = 'kit-catalog-card-slug';
+        const agentLabel = _autoProtocolSessionAgentLabel(session);
+        slug.textContent = agentLabel || 'Auto-selecting planner';
+        copy.appendChild(slug);
+        top.appendChild(copy);
+
+        const badge = document.createElement('span');
+        badge.className = `badge ${_autoProtocolSessionStatusBadgeClass(session)}`;
+        badge.textContent = _autoProtocolSessionStatusLabel(session);
+        top.appendChild(badge);
+        card.appendChild(top);
+
+        const facts = document.createElement('div');
+        facts.className = 'kit-catalog-card-meta';
+        const plannerState = session?.planner_state || {};
+        [
+            session?.mode ? `Mode: ${String(session.mode).replace(/_/g, ' ')}` : '',
+            session?.planner_policy ? `Policy: ${String(session.planner_policy).replace(/_/g, ' ')}` : '',
+            plannerState.queued_at ? `Queued ${UI.relativeTime(plannerState.queued_at)}` : '',
+            plannerState.last_progress_at ? `Progress ${UI.relativeTime(plannerState.last_progress_at)}` : '',
+            session?.updated_at ? `Updated ${UI.relativeTime(session.updated_at)}` : '',
+            session?.planner_task_id ? `Job ${String(session.planner_task_id).slice(0, 8)}` : '',
+        ].filter(Boolean).forEach((label) => {
+            const item = document.createElement('span');
+            item.className = 'kit-catalog-card-meta-item';
+            item.textContent = label;
+            facts.appendChild(item);
+        });
+        card.appendChild(facts);
+
+        const body = document.createElement('p');
+        body.className = 'kit-catalog-card-body';
+        body.textContent = _autoProtocolSessionBody(session);
+        card.appendChild(body);
+
+        item.appendChild(card);
+        return item;
+    }
+
+    function _autoProtocolQueueEl({ full = false } = {}) {
+        const items = Array.isArray(autoProtocolSessions) ? autoProtocolSessions : [];
+        if (!full && !autoProtocolSessionsLoading && !items.length) return null;
+
+        const shell = document.createElement('section');
+        shell.className = 'editor-panel protocol-panel protocol-auto-queue';
+        shell.dataset.key = 'protocol-auto-design-queue';
+
+        const head = document.createElement('div');
+        head.className = 'kit-catalog-hero';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-hero-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-catalog-hero-title';
+        title.textContent = 'Auto Protocol designs';
+        copy.appendChild(title);
+        const body = document.createElement('p');
+        body.className = 'kit-catalog-hero-body';
+        body.textContent = 'Planner jobs keep running after a dialog closes. Open a design here to watch progress, review the draft, apply, publish, or run it.';
+        copy.appendChild(body);
+        head.appendChild(copy);
+
+        const metrics = document.createElement('div');
+        metrics.className = 'kit-catalog-hero-metrics';
+        const planningCount = items.filter((item) => String(item?.status || '').toLowerCase() === 'planning').length;
+        const readyCount = items.filter((item) => String(item?.status || '').toLowerCase() === 'ready').length;
+        [
+            { label: 'Designing', value: planningCount },
+            { label: 'Ready', value: readyCount },
+            { label: 'Recent', value: items.length },
+        ].forEach((metric) => {
+            const chip = document.createElement('div');
+            chip.className = 'kit-catalog-hero-metric';
+            const value = document.createElement('strong');
+            value.className = 'kit-catalog-hero-metric-value';
+            value.textContent = String(metric.value);
+            chip.appendChild(value);
+            const label = document.createElement('span');
+            label.className = 'kit-catalog-hero-metric-label';
+            label.textContent = metric.label;
+            chip.appendChild(label);
+            metrics.appendChild(chip);
+        });
+        head.appendChild(metrics);
+        shell.appendChild(head);
+
+        const actions = document.createElement('div');
+        actions.className = 'kit-catalog-controls';
+        const create = document.createElement('button');
+        create.type = 'button';
+        create.className = 'btn btn-primary';
+        create.textContent = 'New Auto Protocol';
+        create.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', ignoreRememberedSession: true }));
+        actions.appendChild(create);
+        if (!full) {
+            const viewAll = document.createElement('button');
+            viewAll.type = 'button';
+            viewAll.className = 'btn';
+            viewAll.textContent = 'View all designs';
+            viewAll.addEventListener('click', () => Router.navigate('/ui/design-sessions'));
+            actions.appendChild(viewAll);
+        }
+        if (full) {
+            const statusFilter = document.createElement('select');
+            statusFilter.className = 'input';
+            statusFilter.setAttribute('aria-label', 'Design status filter');
+            [
+                ['', 'All designs'],
+                ['planning', 'Planning'],
+                ['ready', 'Ready'],
+                ['blocked', 'Blocked'],
+                ['failed', 'Failed'],
+                ['cancelled', 'Cancelled'],
+                ['applied', 'Applied'],
+                ['published', 'Published'],
+                ['running', 'Run started'],
+            ].forEach(([value, label]) => {
+                const option = document.createElement('option');
+                option.value = value;
+                option.textContent = label;
+                option.selected = value === autoProtocolStatusFilter;
+                statusFilter.appendChild(option);
+            });
+            statusFilter.addEventListener('change', () => {
+                autoProtocolStatusFilter = statusFilter.value;
+                autoProtocolCursor = 0;
+                _writeState({ push: true });
+                void loadAutoProtocolSessions({ quiet: false });
+            });
+            actions.appendChild(statusFilter);
+        }
+        const refresh = document.createElement('button');
+        refresh.type = 'button';
+        refresh.className = 'btn';
+        refresh.textContent = 'Refresh';
+        refresh.addEventListener('click', () => void loadAutoProtocolSessions({ quiet: false }));
+        actions.appendChild(refresh);
+        shell.appendChild(actions);
+
+        const list = document.createElement('ul');
+        list.className = 'kit-catalog-list';
+        if (autoProtocolSessionsLoading && !items.length) {
+            const loadingItem = document.createElement('li');
+            loadingItem.className = 'kit-catalog-item kit-catalog-item-empty';
+            loadingItem.appendChild(UI.renderEmptyState('Loading Auto Protocol designs…', true));
+            list.appendChild(loadingItem);
+        } else {
+            const visibleItems = full ? items : items.slice(0, 8);
+            if (!visibleItems.length) {
+                const empty = document.createElement('li');
+                empty.className = 'kit-catalog-item kit-catalog-item-empty';
+                empty.appendChild(UI.renderEmptyState('No Auto Protocol design sessions match this view.', false));
+                list.appendChild(empty);
+            } else {
+                visibleItems.forEach((session) => list.appendChild(_autoProtocolSessionCard(session, {
+                    selected: full && String(session?.session_id || '') === selectedAutoProtocolSessionId,
+                    onOpen: full
+                        ? (nextSession) => {
+                            selectedAutoProtocolSessionId = String(nextSession?.session_id || '');
+                            selectedAutoProtocolSession = nextSession;
+                            selectedAutoProtocolEvents = [];
+                            autoProtocolQueueActionError = null;
+                            autoProtocolQueueRetryAction = '';
+                            _rememberActiveAutoProtocolSession(selectedAutoProtocolSession);
+                            _writeState({ push: true });
+                            void loadSelectedAutoProtocolSession({ quiet: false });
+                        }
+                        : null,
+                })));
+            }
+        }
+        shell.appendChild(list);
+        if (full) {
+            const paging = document.createElement('div');
+            paging.className = 'kit-catalog-controls';
+            const previous = document.createElement('button');
+            previous.type = 'button';
+            previous.className = 'btn';
+            previous.textContent = 'Previous';
+            previous.disabled = autoProtocolCursor <= 0;
+            previous.addEventListener('click', () => {
+                autoProtocolCursor = Math.max(0, autoProtocolCursor - 24);
+                _writeState({ push: true });
+                void loadAutoProtocolSessions({ quiet: false });
+            });
+            paging.appendChild(previous);
+            const next = document.createElement('button');
+            next.type = 'button';
+            next.className = 'btn';
+            next.textContent = 'Next';
+            next.disabled = autoProtocolSessionsNextCursor === null;
+            next.addEventListener('click', () => {
+                if (autoProtocolSessionsNextCursor === null) return;
+                autoProtocolCursor = Number(autoProtocolSessionsNextCursor || 0);
+                _writeState({ push: true });
+                void loadAutoProtocolSessions({ quiet: false });
+            });
+            paging.appendChild(next);
+            shell.appendChild(paging);
+        }
+        return shell;
+    }
+
+    function _autoProtocolDesignSessionDetailEl() {
+        const section = document.createElement('section');
+        section.className = 'editor-panel protocol-panel protocol-auto-session-detail';
+        section.dataset.key = 'protocol-auto-session-detail';
+        if (!selectedAutoProtocolSessionId) {
+            section.appendChild(UI.renderEmptyState('Select an Auto Protocol design session to inspect progress and actions.', false));
+            return section;
+        }
+        if (autoProtocolDetailLoading && !selectedAutoProtocolSession) {
+            section.appendChild(UI.renderEmptyState('Loading design session…', true));
+            return section;
+        }
+        const session = selectedAutoProtocolSession;
+        if (!session) {
+            section.appendChild(UI.renderEmptyState('Design session was not found or is not visible.', false));
+            return section;
+        }
+
+        const head = document.createElement('div');
+        head.className = 'kit-catalog-card-top';
+        const copy = document.createElement('div');
+        copy.className = 'kit-catalog-card-copy';
+        const title = document.createElement('h3');
+        title.className = 'kit-catalog-hero-title';
+        title.textContent = _autoProtocolSessionTitle(session);
+        copy.appendChild(title);
+        const sub = document.createElement('p');
+        sub.className = 'quiet-note';
+        sub.textContent = [
+            session.session_id ? `Session ${String(session.session_id).slice(0, 12)}` : '',
+            session.updated_at ? `updated ${UI.relativeTime(session.updated_at)}` : '',
+        ].filter(Boolean).join(' · ');
+        copy.appendChild(sub);
+        head.appendChild(copy);
+        const badge = document.createElement('span');
+        badge.className = `badge ${_autoProtocolSessionStatusBadgeClass(session)}`;
+        badge.textContent = _autoProtocolSessionStatusLabel(session);
+        head.appendChild(badge);
+        section.appendChild(head);
+
+        const actions = document.createElement('div');
+        actions.className = 'kit-catalog-controls';
+        const ready = _autoProtocolReady(session);
+        const planning = _autoProtocolPlanning(session);
+        const hasDraft = _autoProtocolHasDraft(session);
+        const addAction = (label, action, primary = false) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = primary ? 'btn btn-primary' : 'btn';
+            button.textContent = label;
+            const actionKey = `${String(session?.session_id || '')}:${action}`;
+            button.disabled = planning || !hasDraft || (action !== 'apply' && !ready) || autoProtocolQueueActionInFlight === actionKey;
+            button.addEventListener('click', () => void _runAutoProtocolQueueAction(action));
+            actions.appendChild(button);
+        };
+        addAction('Apply draft', 'apply', !ready);
+        addAction('Publish', 'publish');
+        addAction('Publish & Run', 'run', ready);
+        const openDesigner = document.createElement('button');
+        openDesigner.type = 'button';
+        openDesigner.className = 'btn';
+        openDesigner.textContent = session.target_protocol_id ? 'Open designer' : 'Open dialog';
+        openDesigner.addEventListener('click', () => {
+            const protocolId = String(session.target_protocol_id || session?.applied_protocol?.protocol?.protocol_id || '').trim();
+            if (protocolId) {
+                Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);
+                return;
+            }
+            _openAutoProtocolDialog({ mode: 'create', sessionId: session.session_id });
+        });
+        actions.appendChild(openDesigner);
+        section.appendChild(actions);
+
+        const requirementText = String(session?.requirement_text || '').trim();
+        if (requirementText) {
+            const requirement = document.createElement('p');
+            requirement.className = 'quiet-note protocol-auto-session-requirement';
+            requirement.textContent = requirementText;
+            section.appendChild(requirement);
+        }
+
+        if (autoProtocolQueueActionError) {
+            section.appendChild(_autoProtocolErrorEl(
+                'Auto Protocol action failed',
+                autoProtocolQueueActionError,
+                autoProtocolQueueRetryAction
+                    ? () => _runAutoProtocolQueueAction(autoProtocolQueueRetryAction)
+                    : null,
+            ));
+        }
+
+        if (planning) {
+            section.appendChild(_autoProtocolProgressEl(session));
+        } else {
+            section.appendChild(_autoProtocolSummaryEl(session));
+        }
+
+        const timeline = document.createElement('details');
+        timeline.className = 'kit-stage-editor-section is-collapsible protocol-auto-session-events';
+        timeline.open = true;
+        const summary = document.createElement('summary');
+        summary.className = 'kit-stage-editor-summary';
+        summary.textContent = `Session events (${selectedAutoProtocolEvents.length})`;
+        timeline.appendChild(summary);
+        const list = document.createElement('div');
+        list.className = 'task-artifact-list';
+        UI.reconcileChildren(list, selectedAutoProtocolEvents.length
+            ? selectedAutoProtocolEvents.map((event) => UI.renderListRow({
+                label: _titleCaseWords(String(event.event_kind || 'event').replace(/_/g, ' ')),
+                sublabel: [
+                    event.created_at ? UI.relativeTime(event.created_at) : '',
+                    event.actor_ref || '',
+                ].filter(Boolean).join(' · '),
+                badgeText: event.event_kind || '',
+            }))
+            : [UI.renderEmptyState('No session events have been recorded yet.', false)]);
+        timeline.appendChild(list);
+        section.appendChild(timeline);
+        return section;
+    }
+
+    function _autoProtocolDesignSessionsRouteEl() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'protocol-catalog-shell protocol-auto-design-sessions-route';
+        const queue = _autoProtocolQueueEl({ full: true });
+        if (queue) wrapper.appendChild(queue);
+        wrapper.appendChild(_autoProtocolDesignSessionDetailEl());
+        return wrapper;
+    }
+
     function _catalogEl() {
         const records = UI.defaultVisibleRecords(protocols, { includeHidden: includeGeneratedCatalog });
         const wrapper = document.createElement('div');
         wrapper.className = 'protocol-catalog-shell';
+        const queue = _autoProtocolQueueEl();
+        if (queue) wrapper.appendChild(queue);
         if (templateChooserMode === 'template' && protocolTemplates.length) {
             wrapper.appendChild(_templateChooserEl());
         }
@@ -7757,7 +8814,7 @@ function renderProtocolWorkspace(container) {
             autoBtn.type = 'button';
             autoBtn.className = 'btn';
             autoBtn.textContent = 'Auto protocol';
-            autoBtn.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create' }));
+            autoBtn.addEventListener('click', () => _openAutoProtocolDialog({ mode: 'create', ignoreRememberedSession: true }));
             controls.appendChild(autoBtn);
             const toggle = document.createElement('a');
             UI.updateQueryToggleLink(toggle, includeGeneratedCatalog, {
@@ -7781,6 +8838,13 @@ function renderProtocolWorkspace(container) {
         renderInFlight = true;
         try {
         _captureCollapsibleSectionState();
+        if (designSessionsRoute) {
+            header.hidden = false;
+            _writeState();
+            UI.reconcileChildren(contentEl, [_autoProtocolDesignSessionsRouteEl()]);
+            _lifecycleHeaderRef = null;
+            return;
+        }
         if (!currentProtocolId) {
             header.hidden = false;
             _writeState();
@@ -7856,6 +8920,165 @@ function renderProtocolWorkspace(container) {
         if (!quiet) render();
     }
 
+    function _mergeAutoProtocolSessionIntoList(session) {
+        const sessionId = String(session?.session_id || '').trim();
+        if (!sessionId) return false;
+        const statusFilter = String(autoProtocolStatusFilter || '').trim();
+        const matchesFilter = !designSessionsRoute || !statusFilter || String(session?.status || '') === statusFilter;
+        let changed = false;
+        const next = [];
+        let replaced = false;
+        (Array.isArray(autoProtocolSessions) ? autoProtocolSessions : []).forEach((item) => {
+            if (String(item?.session_id || '') !== sessionId) {
+                next.push(item);
+                return;
+            }
+            replaced = true;
+            changed = JSON.stringify(item || {}) !== JSON.stringify(session || {});
+            if (matchesFilter) next.push(session);
+        });
+        if (!replaced && matchesFilter) {
+            next.unshift(session);
+            changed = true;
+        }
+        if (replaced && !matchesFilter) changed = true;
+        if (changed) autoProtocolSessions = next;
+        return changed;
+    }
+
+    async function loadAutoProtocolSessions({ quiet = false } = {}) {
+        autoProtocolSessionsLoading = true;
+        if (!quiet) render();
+        try {
+            const payload = await API.listProtocolAutoSessions({
+                limit: designSessionsRoute ? 24 : 12,
+                status: designSessionsRoute ? autoProtocolStatusFilter : '',
+                cursor: designSessionsRoute ? autoProtocolCursor : 0,
+            });
+            autoProtocolSessions = Array.isArray(payload?.items) ? payload.items : [];
+            const rawNextCursor = payload?.next_cursor;
+            const parsedNextCursor = Number(rawNextCursor);
+            autoProtocolSessionsNextCursor = rawNextCursor === null || rawNextCursor === undefined || rawNextCursor === '' || !Number.isFinite(parsedNextCursor)
+                ? null
+                : parsedNextCursor;
+            if (designSessionsRoute && selectedAutoProtocolSessionId && !selectedAutoProtocolSession) {
+                const listed = autoProtocolSessions.find((item) => String(item?.session_id || '') === selectedAutoProtocolSessionId);
+                if (listed) selectedAutoProtocolSession = listed;
+            }
+        } catch (err) {
+            autoProtocolSessions = [];
+            autoProtocolSessionsNextCursor = null;
+            if (!quiet) UI.reportError('Failed to load Auto Protocol designs', err);
+        } finally {
+            autoProtocolSessionsLoading = false;
+        }
+        if (!quiet) render();
+    }
+
+    function _subscribeSelectedAutoProtocolSession() {
+        if (selectedAutoProtocolSubscription) {
+            selectedAutoProtocolSubscription();
+            selectedAutoProtocolSubscription = null;
+        }
+        const sessionId = String(selectedAutoProtocolSessionId || '').trim();
+        if (!designSessionsRoute || !sessionId) return;
+        selectedAutoProtocolSubscription = _subscribeAutoProtocolSession(sessionId, async (updated) => {
+            if (String(sessionId || '') !== String(selectedAutoProtocolSessionId || '')) return;
+            if (String(updated?.session_id || '') !== String(selectedAutoProtocolSessionId || '')) return;
+            selectedAutoProtocolSession = updated;
+            _mergeAutoProtocolSessionIntoList(updated);
+            try {
+                const events = await API.listProtocolAutoSessionEvents(sessionId);
+                selectedAutoProtocolEvents = Array.isArray(events?.items) ? events.items : [];
+            } catch (err) {
+                console.warn('Failed to refresh Auto Protocol session events', err);
+            }
+            render();
+        });
+    }
+
+    async function loadSelectedAutoProtocolSession({ quiet = false } = {}) {
+        const sessionId = String(selectedAutoProtocolSessionId || '').trim();
+        if (selectedAutoProtocolSubscription) {
+            selectedAutoProtocolSubscription();
+            selectedAutoProtocolSubscription = null;
+        }
+        if (!sessionId) {
+            selectedAutoProtocolSession = null;
+            selectedAutoProtocolEvents = [];
+            return;
+        }
+        autoProtocolDetailLoading = true;
+        if (String(selectedAutoProtocolSession?.session_id || '') !== sessionId) {
+            selectedAutoProtocolSession = null;
+            selectedAutoProtocolEvents = [];
+        }
+        if (!quiet) render();
+        try {
+            const [session, events] = await Promise.all([
+                API.getProtocolAutoSession(sessionId),
+                API.listProtocolAutoSessionEvents(sessionId),
+            ]);
+            selectedAutoProtocolSession = session;
+            selectedAutoProtocolEvents = Array.isArray(events?.items) ? events.items : [];
+            _rememberActiveAutoProtocolSession(session);
+            _subscribeSelectedAutoProtocolSession();
+        } catch (err) {
+            selectedAutoProtocolSession = null;
+            selectedAutoProtocolEvents = [];
+            if (!quiet) UI.reportError('Failed to load Auto Protocol design session', err);
+        } finally {
+            autoProtocolDetailLoading = false;
+        }
+        if (!quiet) render();
+    }
+
+    async function _runAutoProtocolQueueAction(action) {
+        const sessionId = String(selectedAutoProtocolSessionId || selectedAutoProtocolSession?.session_id || '').trim();
+        if (!sessionId) return;
+        const actionKey = `${sessionId}:${String(action || '').trim()}`;
+        if (autoProtocolQueueActionInFlight) return;
+        autoProtocolQueueActionInFlight = actionKey;
+        autoProtocolQueueActionError = null;
+        autoProtocolQueueRetryAction = '';
+        render();
+        try {
+            selectedAutoProtocolSession = await _autoProtocolRunAction(sessionId, action);
+            await loadAutoProtocolSessions({ quiet: true });
+            await loadSelectedAutoProtocolSession({ quiet: true });
+            if (action === 'apply' || action === 'publish') {
+                const protocolId = _autoProtocolTargetProtocolId(selectedAutoProtocolSession);
+                if (protocolId) {
+                    Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);
+                    return;
+                }
+            }
+            if (action === 'run') {
+                const runId = _autoProtocolRunId(selectedAutoProtocolSession);
+                if (runId) {
+                    Router.navigate(`/ui/runs?run_id=${encodeURIComponent(runId)}`);
+                    return;
+                }
+            }
+            render();
+        } catch (err) {
+            if (err?.session?.session_id) {
+                selectedAutoProtocolSession = err.session;
+                _mergeAutoProtocolSessionIntoList(err.session);
+            }
+            autoProtocolQueueActionError = err;
+            const status = Number(err?.status || 0);
+            const code = String(err?.errorCode || '').trim().toUpperCase();
+            autoProtocolQueueRetryAction = (!status || status === 408 || status === 429 || status >= 500 || (status === 409 && code === 'CONCURRENT_MODIFICATION'))
+                ? action
+                : '';
+            render();
+        } finally {
+            autoProtocolQueueActionInFlight = '';
+            render();
+        }
+    }
+
     async function loadAuthoringOptions() {
         const [options, templates] = await Promise.all([
             API.getProtocolAuthoringOptions(),
@@ -7916,6 +9139,8 @@ function renderProtocolWorkspace(container) {
             availableCatalogSkills = Array.from(catalogByName.values());
             if (currentProtocol && !protocolDetailLoading) {
                 render();
+            } else if (!currentProtocolId && Array.isArray(autoProtocolSessions) && autoProtocolSessions.length) {
+                render();
             }
         } catch (err) {
             availableAgents = [];
@@ -7948,7 +9173,14 @@ function renderProtocolWorkspace(container) {
     async function bootstrap() {
         UI.reconcileChildren(contentEl, [UI.renderEmptyState('Loading protocols…', true)]);
         try {
-            await Promise.all([loadProtocols({ quiet: true }), loadAuthoringOptions()]);
+            await Promise.all([
+                loadProtocols({ quiet: true }),
+                loadAutoProtocolSessions({ quiet: true }),
+                loadAuthoringOptions(),
+            ]);
+            if (designSessionsRoute && selectedAutoProtocolSessionId) {
+                await loadSelectedAutoProtocolSession({ quiet: true });
+            }
             if (currentProtocolId) {
                 await loadProtocolDetail();
             } else {
@@ -7961,6 +9193,10 @@ function renderProtocolWorkspace(container) {
     }
 
     cleanups.add(() => {
+        if (selectedAutoProtocolSubscription) {
+            selectedAutoProtocolSubscription();
+            selectedAutoProtocolSubscription = null;
+        }
         _clearAutosaveTimer();
         if (contentEl.__workflowCanvasRoot?.__workflowCanvasCleanup) {
             contentEl.__workflowCanvasRoot.__workflowCanvasCleanup();
@@ -7972,7 +9208,13 @@ function renderProtocolWorkspace(container) {
     window.addEventListener('resize', onResize);
     cleanups.add(() => window.removeEventListener('resize', onResize));
 
-    UI.subscribeWithRefresh(cleanups, 'protocols', () => loadProtocols({ quiet: false }), 350);
+    UI.subscribeWithRefresh(cleanups, 'protocols', async () => {
+        await Promise.all([
+            loadProtocols({ quiet: true }),
+            loadAutoProtocolSessions({ quiet: true }),
+        ]);
+        render();
+    }, 350);
     container.__routeReady = bootstrap();
 }
 
@@ -8009,6 +9251,7 @@ function renderProtocolRuns(container) {
     let activeRunStageExecutionId = '';
     let activeRunStageFollowsCurrent = true;
     let activeRunArtifactStageExecutionId = '';
+    const runDisclosureState = new Map();
     let currentRunSubscription = null;
     let runDetailRequestToken = 0;
     let runPaginator = null;
@@ -8196,8 +9439,35 @@ function renderProtocolRuns(container) {
         });
     }
 
+    function _protocolIssueLabel(kind) {
+        const value = String(kind || '').trim();
+        if (value === 'stuck_lease') return 'Expired write lease';
+        return value.replace(/_/g, ' ');
+    }
+
+    function _issueFactParts(issue = {}) {
+        const parts = [];
+        const runState = String(issue.run_status || '').trim();
+        const stageState = String(issue.stage_status || '').trim();
+        if (runState || stageState) {
+            parts.push(`state ${[runState, stageState].filter(Boolean).join(' / ')}`);
+        }
+        if (issue.lease_expires_at) {
+            parts.push(`lease expires ${UI.relativeTime(issue.lease_expires_at) || issue.lease_expires_at}`);
+        }
+        if (issue.timeout_at) {
+            parts.push(`timeout ${UI.relativeTime(issue.timeout_at) || issue.timeout_at}`);
+        }
+        if (issue.task_updated_at) {
+            parts.push(`task updated ${UI.relativeTime(issue.task_updated_at) || issue.task_updated_at}`);
+        } else if (issue.updated_at) {
+            parts.push(`updated ${UI.relativeTime(issue.updated_at) || issue.updated_at}`);
+        }
+        return parts;
+    }
+
     function _issueAttentionLabel(issue) {
-        const kind = String(issue?.issue_kind || '').trim().replace(/_/g, ' ');
+        const kind = _protocolIssueLabel(issue?.issue_kind || '');
         const code = String(issue?.issue_code || '').trim().replace(/_/g, ' ');
         return (kind || code || 'Issue').replace(/\b\w/g, (char) => char.toUpperCase());
     }
@@ -8212,10 +9482,11 @@ function renderProtocolRuns(container) {
             }
             shell.dataset.runId = String(item.protocol_run_id || '');
             const row = UI.renderListRow({
-                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
+                label: `${_protocolIssueLabel(item.issue_kind)} · ${item.protocol_display_name || item.protocol_id || 'Protocol issue'}`,
                 sublabel: [
                     item.stage_key ? `stage ${item.stage_key}` : '',
                     item.issue_detail || item.issue_code || '',
+                    ..._issueFactParts(item),
                 ].filter(Boolean).join(' · '),
                 badgeText: item.issue_code || item.stage_key || '',
                 className: selected ? 'is-selected' : '',
@@ -8225,6 +9496,139 @@ function renderProtocolRuns(container) {
             shell.appendChild(row);
             return shell;
         });
+    }
+
+    function _runDisclosureKey(name) {
+        return `${String(currentRunId || 'run')}:${String(name || 'section')}`;
+    }
+
+    function _bindRunDisclosure(details, name, { open = false } = {}) {
+        if (!(details instanceof HTMLDetailsElement)) return details;
+        const key = _runDisclosureKey(name);
+        details.dataset.disclosureKey = key;
+        details.open = runDisclosureState.has(key) ? Boolean(runDisclosureState.get(key)) : Boolean(open);
+        details.addEventListener('toggle', () => {
+            runDisclosureState.set(key, Boolean(details.open));
+        });
+        return details;
+    }
+
+    function _latestBlockedTransition(detail = currentRun) {
+        const transitions = Array.isArray(detail?.transitions) ? detail.transitions : [];
+        const stageId = String(detail?.run?.current_stage_execution_id || '').trim();
+        return transitions.find((item) => {
+            const kind = String(item?.transition_kind || '').trim().toLowerCase();
+            const fromStage = String(item?.from_stage_execution_id || '').trim();
+            const toStage = String(item?.to_stage_execution_id || '').trim();
+            const stageMatches = !stageId || !fromStage || fromStage === stageId || toStage === stageId;
+            return stageMatches && kind === 'blocked';
+        }) || null;
+    }
+
+    function _missingEvidenceList(detail = currentRun) {
+        const metadata = _latestBlockedTransition(detail)?.metadata_json || {};
+        const missing = Array.isArray(metadata?.missing_runtime_evidence) ? metadata.missing_runtime_evidence : [];
+        return missing.map((item) => String(item || '').trim()).filter(Boolean);
+    }
+
+    function _evidenceStatusList(detail = currentRun) {
+        const metadata = _latestBlockedTransition(detail)?.metadata_json || {};
+        const items = Array.isArray(metadata?.evidence_status) ? metadata.evidence_status : [];
+        return items.filter((item) => item && typeof item === 'object');
+    }
+
+    function _evidenceMatrixEl(detail = currentRun, { limit = 12 } = {}) {
+        const items = _evidenceStatusList(detail);
+        if (!items.length) return null;
+        const shell = document.createElement('div');
+        shell.className = 'run-evidence-matrix';
+        const grouped = new Map();
+        items.forEach((item) => {
+            const category = String(item.category || 'verification').trim() || 'verification';
+            if (!grouped.has(category)) grouped.set(category, []);
+            grouped.get(category).push(item);
+        });
+        Array.from(grouped.entries()).slice(0, limit).forEach(([category, group]) => {
+            const section = document.createElement('div');
+            section.className = 'run-evidence-matrix-group';
+            const title = document.createElement('div');
+            title.className = 'run-evidence-matrix-title';
+            title.textContent = category;
+            section.appendChild(title);
+            group.slice(0, 6).forEach((item) => {
+                const row = document.createElement('div');
+                row.className = `run-evidence-matrix-row${String(item.trust_tier || '') === 'tier_3' ? ' is-advisory' : ''}`;
+                const main = document.createElement('div');
+                main.className = 'run-evidence-matrix-main';
+                const label = document.createElement('strong');
+                label.textContent = String(item.evidence_id || item.requirement_id || item.kind || 'Evidence');
+                main.appendChild(label);
+                const detailText = document.createElement('span');
+                detailText.textContent = [
+                    String(item.kind || '').replace(/_/g, ' '),
+                    String(item.reason_detail || item.reason_code || '').trim(),
+                ].filter(Boolean).join(' · ');
+                main.appendChild(detailText);
+                row.appendChild(main);
+                const tier = document.createElement('span');
+                tier.className = `badge ${String(item.trust_tier || '') === 'tier_3' ? 'badge-open' : 'badge-blocked'}`;
+                tier.textContent = String(item.trust_tier || 'tier').replace(/_/g, ' ');
+                row.appendChild(tier);
+                section.appendChild(row);
+            });
+            shell.appendChild(section);
+        });
+        return shell;
+    }
+
+    function _renderRunActionBlockedResult(mutation, detail = currentRun) {
+        const run = detail?.run || mutation?.run || currentRun?.run || {};
+        const stage = mutation?.stage_execution || detail?.stage_executions?.[0] || null;
+        const transition = _latestBlockedTransition(detail);
+        const panel = document.createElement('div');
+        panel.className = 'error-card protocol-run-action-result';
+        panel.setAttribute('role', 'alert');
+
+        const title = document.createElement('strong');
+        title.textContent = 'Run is still blocked';
+        panel.appendChild(title);
+
+        const detailText = String(
+            run.blocked_detail
+            || stage?.failure_detail
+            || transition?.reason
+            || mutation?.message
+            || 'The Registry kept this run blocked after applying the operator action.',
+        ).trim();
+        const copy = document.createElement('p');
+        copy.textContent = detailText;
+        panel.appendChild(copy);
+
+        const code = String(run.blocked_code || stage?.failure_code || transition?.error_code || '').trim();
+        const missing = _missingEvidenceList(detail);
+        const matrix = _evidenceMatrixEl(detail, { limit: 6 });
+        if (code || missing.length) {
+            const facts = document.createElement('div');
+            facts.className = 'validation-list';
+            if (code) {
+                const row = document.createElement('div');
+                row.textContent = `Code: ${code}`;
+                facts.appendChild(row);
+            }
+            missing.forEach((value) => {
+                const row = document.createElement('div');
+                row.textContent = `Missing: ${value}`;
+                facts.appendChild(row);
+            });
+            panel.appendChild(facts);
+        }
+        if (matrix) panel.appendChild(matrix);
+
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = 'This result remains open so you can read and copy it. Close the dialog when you are done.';
+        panel.appendChild(note);
+        return panel;
     }
 
     function _runStatusValue(run) {
@@ -8666,6 +10070,17 @@ function renderProtocolRuns(container) {
                 visible: active,
                 enabled: active,
             },
+            {
+                action: 'interrupt',
+                label: 'Interrupt',
+                note: 'Interrupt asks the assigned bot to stop the current provider process and blocks this stage so you can retry, send back, or cancel after reading the preserved result state.',
+                confirmLabel: 'Interrupt stage',
+                successMessage: 'Stage interrupt requested.',
+                requireReason: true,
+                visible: active && currentStageBusy,
+                enabled: active && currentStageBusy,
+                intervention: true,
+            },
         ];
     }
 
@@ -8803,6 +10218,10 @@ function renderProtocolRuns(container) {
         reasonInput.placeholder = 'Short reason recorded in the protocol audit trail';
         form.appendChild(reasonInput);
 
+        const resultPanel = document.createElement('div');
+        resultPanel.hidden = true;
+        form.appendChild(resultPanel);
+
         const cancelBtn = document.createElement('button');
         cancelBtn.type = 'button';
         cancelBtn.className = 'btn';
@@ -8816,6 +10235,8 @@ function renderProtocolRuns(container) {
             role: 'alertdialog',
             initialFocus: reasonInput,
             maxWidth: '680px',
+            closeOnOverlay: false,
+            closeOnEscape: false,
         });
         cancelBtn.addEventListener('click', () => view.close());
         confirmBtn.addEventListener('click', async () => {
@@ -8825,8 +10246,9 @@ function renderProtocolRuns(container) {
                 return;
             }
             confirmBtn.disabled = true;
+            let mutation = null;
             try {
-                await API.actOnProtocolRun(
+                mutation = await API.actOnProtocolRun(
                     currentRun.run.protocol_run_id,
                     spec.action,
                     { reason },
@@ -8837,22 +10259,109 @@ function renderProtocolRuns(container) {
                             : `${Date.now()}${Math.random().toString(16).slice(2)}`,
                     },
                 );
-                view.close();
+            } catch (err) {
+                if (Number(err?.status || 0) === 409 || String(err?.errorCode || '').includes('CONCURRENT')) {
+                    await loadRunDetail();
+                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning', { timeout: 0 });
+                } else {
+                    const message = err && err.message ? err.message : String(err || 'Unknown error');
+                    UI.notify(`Failed to ${spec.action.replace('-', ' ')} the protocol run: ${message}`, 'danger', { timeout: 0 });
+                    console.error('Protocol run action failed', err);
+                }
+                confirmBtn.disabled = false;
+                return;
+            }
+            try {
                 await loadRuns();
                 await loadIssues({ rerender: false });
                 await loadRunDetail();
-                UI.notify(spec.successMessage, 'success');
             } catch (err) {
-                if (String(err && err.message || '').includes('409:')) {
-                    await loadRunDetail();
-                    UI.notify('The run changed before this action was applied. Review the refreshed state and try again.', 'warning');
-                } else {
-                    UI.reportError(`Failed to ${spec.action.replace('-', ' ')} the protocol run`, err, {
-                        context: 'Protocol run action failed',
-                    });
-                }
+                UI.notify('The action was applied, but the refreshed run detail could not be loaded. Reload the run before taking another action.', 'warning', { timeout: 0 });
+                console.error('Protocol run refresh after action failed', err);
             }
+            const resultRun = currentRun?.run || mutation?.run || {};
+            if (String(resultRun.status || '').trim().toLowerCase() === 'blocked') {
+                UI.reconcileChildren(resultPanel, [_renderRunActionBlockedResult(mutation, currentRun)]);
+                resultPanel.hidden = false;
+                reasonInput.disabled = true;
+                confirmBtn.hidden = true;
+                cancelBtn.textContent = 'Close';
+                confirmBtn.disabled = false;
+                return;
+            }
+            view.close();
+            UI.notify(spec.successMessage, 'success');
             confirmBtn.disabled = false;
+        });
+    }
+
+    function _openForkRunDialog(stageExecution, mode = 'rerun_selected') {
+        if (!currentRun?.run?.protocol_run_id || !stageExecution?.protocol_stage_execution_id) {
+            UI.notify('Select a stage before forking this run.', 'warning');
+            return;
+        }
+        const normalizedMode = mode === 'continue_after' ? 'continue_after' : 'rerun_selected';
+        const form = document.createElement('div');
+        form.className = 'studio-dialog-form';
+        const note = document.createElement('p');
+        note.className = 'quiet-note';
+        note.textContent = normalizedMode === 'continue_after'
+            ? 'Create a new run, copy snapshots through this stage, seed the prior context, and continue at the next stage.'
+            : 'Create a new run, copy snapshots before this stage, and rerun this selected stage in a separate workspace prefix.';
+        form.appendChild(note);
+        const reasonInput = document.createElement('textarea');
+        reasonInput.className = 'guidance-textarea';
+        reasonInput.rows = 4;
+        reasonInput.placeholder = 'Optional reason for the fork audit trail';
+        form.appendChild(reasonInput);
+        const cancelBtn = document.createElement('button');
+        cancelBtn.type = 'button';
+        cancelBtn.className = 'btn';
+        cancelBtn.textContent = 'Cancel';
+        const confirmBtn = document.createElement('button');
+        confirmBtn.type = 'button';
+        confirmBtn.className = 'btn btn-primary';
+        confirmBtn.textContent = normalizedMode === 'continue_after' ? 'Continue in new run' : 'Rerun stage in new run';
+        const view = UI.showDialog(normalizedMode === 'continue_after' ? 'Continue after stage' : 'Rerun selected stage', form, {
+            actions: [cancelBtn, confirmBtn],
+            maxWidth: '620px',
+        });
+        cancelBtn.addEventListener('click', () => view.close());
+        confirmBtn.addEventListener('click', async () => {
+            confirmBtn.disabled = true;
+            try {
+                const result = await API.forkProtocolRunFromStage(
+                    currentRun.run.protocol_run_id,
+                    {
+                        stage_execution_id: stageExecution.protocol_stage_execution_id,
+                        fork_mode: normalizedMode,
+                        fork_reason: String(reasonInput.value || '').trim(),
+                    },
+                    {
+                        idempotencyKey: (window.crypto && typeof window.crypto.randomUUID === 'function')
+                            ? window.crypto.randomUUID().replace(/-/g, '')
+                            : `${Date.now()}${Math.random().toString(16).slice(2)}`,
+                    },
+                );
+                view.close();
+                await loadRuns();
+                if (result?.run?.protocol_run_id) {
+                    _setRunSelection(result.run.protocol_run_id);
+                }
+                UI.notify('Forked protocol run created.', 'success');
+                renderRunsRoute();
+            } catch (err) {
+                if (String(err?.errorCode || '') === 'PROTOCOL_FORK_SNAPSHOTS_MISSING') {
+                    const missing = Array.isArray(err?.details?.missing_snapshots)
+                        ? err.details.missing_snapshots.join(', ')
+                        : '';
+                    UI.notify(missing ? `Fork needs snapshots: ${missing}` : 'Fork needs durable artifact snapshots before it can continue.', 'warning', { timeout: 0 });
+                } else {
+                    UI.reportError('Fork run failed', err, { context: 'Protocol fork failed' });
+                }
+            } finally {
+                confirmBtn.disabled = false;
+            }
         });
     }
 
@@ -8893,6 +10402,54 @@ function renderProtocolRuns(container) {
         qualityHint.textContent = 'Good improvements should produce a prepared runtime package, a routed UI/API users can actually exercise, a pass/fail outcome-readiness matrix, and customer-facing copy that uses the requested product/domain brand rather than Octopus.';
         form.appendChild(qualityHint);
 
+        const plannerField = _createAutoProtocolPlannerField([], { loading: true });
+        form.appendChild(plannerField.element);
+
+        const lessonPreview = document.createElement('details');
+        lessonPreview.className = 'protocol-auto-detail';
+        lessonPreview.open = true;
+        const lessonSummary = document.createElement('summary');
+        lessonSummary.textContent = 'Candidate lessons from this run';
+        lessonPreview.appendChild(lessonSummary);
+        const lessonBody = document.createElement('div');
+        lessonBody.className = 'protocol-auto-detail-body';
+        const lessonItems = [];
+        if (sourceRun.run?.blocked_code) {
+            lessonItems.push(`Blocked: ${sourceRun.run.blocked_code} ${sourceRun.run.blocked_detail || ''}`.trim());
+        }
+        (sourceRun.stage_executions || []).forEach((stage) => {
+            if (stage.failure_code) {
+                lessonItems.push(`Stage ${stage.stage_key} failed/blocked with ${stage.failure_code}: ${stage.failure_detail || ''}`.trim());
+            } else if (stage.decision_summary) {
+                lessonItems.push(`Stage ${stage.stage_key}: ${stage.decision_summary}`);
+            }
+        });
+        (sourceRun.runtime_events || []).forEach((event) => {
+            const kind = String(event.event_kind || '');
+            if (['journey_failed', 'client_error', 'health_checked', 'runtime_error'].includes(kind)) {
+                lessonItems.push(`Runtime ${kind}: ${event.summary || ''}`.trim());
+            }
+        });
+        (sourceRun.transitions || []).forEach((transition) => {
+            if (transition.error_code || ['late_result', 'runtime_evidence_auto_accept', 'task_cancel_requested'].includes(String(transition.transition_kind || ''))) {
+                lessonItems.push(`${transition.transition_kind}: ${transition.reason || transition.error_code || ''}`.trim());
+            }
+        });
+        (sourceRun.artifacts || []).forEach((artifact) => {
+            if (artifact.exists === false || ['missing', 'declared'].includes(String(artifact.verification_state || ''))) {
+                lessonItems.push(`Artifact ${artifact.artifact_key} was not proved available.`);
+            }
+        });
+        const lessonNodes = lessonItems.slice(0, 12).map((text) => {
+            const item = document.createElement('p');
+            item.className = 'quiet-note';
+            item.textContent = text;
+            return item;
+        });
+        UI.reconcileChildren(lessonBody, lessonNodes.length ? lessonNodes : [UI.renderEmptyState('No prior blockers or evidence lessons were found in the current run detail. The server will still harvest structured lessons when generation starts.', true)]);
+        lessonPreview.appendChild(lessonBody);
+        form.appendChild(lessonPreview);
+
         const status = document.createElement('p');
         status.className = 'quiet-note';
         status.textContent = 'The generated improvement becomes a normal protocol draft you can apply, publish, and run.';
@@ -8926,44 +10483,158 @@ function renderProtocolRuns(container) {
         runBtn.className = 'btn btn-primary';
         runBtn.textContent = 'Publish & Run';
         runBtn.hidden = true;
+        const queueBtn = document.createElement('button');
+        queueBtn.type = 'button';
+        queueBtn.className = 'btn';
+        queueBtn.textContent = 'View in queue';
+        queueBtn.hidden = true;
         const view = UI.showDialog('Improve this run', form, {
-            actions: [cancelBtn, generateBtn, applyBtn, publishBtn, runBtn],
+            actions: [cancelBtn, generateBtn, applyBtn, publishBtn, runBtn, queueBtn],
             maxWidth: '760px',
             initialFocus: request,
             closeOnOverlay: false,
+            closeOnEscape: false,
         });
         view.dialog.classList.add('protocol-auto-modal');
+        let sessionSubscription = null;
+        let planningWaitSeq = 0;
+        const originalClose = view.close;
+        view.close = () => {
+            if (sessionSubscription) {
+                sessionSubscription();
+                sessionSubscription = null;
+            }
+            originalClose();
+        };
+        void API.listAgents({ limit: 100 }).then((payload) => {
+            const agents = Array.isArray(payload?.agents) ? payload.agents : (Array.isArray(payload) ? payload : []);
+            _populateAutoProtocolPlannerSelect(plannerField.select, agents);
+        }).catch((err) => {
+            console.warn('Failed to load planner agents for run improvement dialog', err);
+            _populateAutoProtocolPlannerSelect(plannerField.select, []);
+        });
 
         const syncActions = () => {
             const hasSession = Boolean(session?.session_id);
+            const planning = _autoProtocolPlanning(session);
+            const hasDraft = _autoProtocolHasDraft(session);
+            const actionable = hasSession && !planning && hasDraft;
             const ready = _runAutoSessionReady(session);
             cancelBtn.textContent = hasSession ? 'Close' : 'Cancel';
-            generateBtn.hidden = hasSession;
-            applyBtn.hidden = !hasSession;
-            publishBtn.hidden = !hasSession;
-            runBtn.hidden = !hasSession;
-            publishBtn.disabled = !ready;
-            runBtn.disabled = !ready;
-            applyBtn.className = ready ? 'btn' : 'btn btn-primary';
+            _setAutoProtocolButtonState(generateBtn, { visible: !(hasSession && (planning || hasDraft)) });
+            _setAutoProtocolButtonState(applyBtn, { visible: actionable });
+            _setAutoProtocolButtonState(publishBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(runBtn, { visible: actionable, disabled: planning || !ready });
+            _setAutoProtocolButtonState(queueBtn, { visible: hasSession });
+            applyBtn.className = ready || planning ? 'btn' : 'btn btn-primary';
             runBtn.className = ready ? 'btn btn-primary' : 'btn';
             runBtn.style.order = hasSession && ready ? '0' : '3';
             applyBtn.style.order = hasSession ? (ready ? '1' : '0') : '';
             publishBtn.style.order = hasSession ? '2' : '';
+            queueBtn.style.order = hasSession ? '3' : '';
             cancelBtn.style.order = hasSession ? '4' : '';
             const gateTitle = ready ? '' : 'Resolve validation and assignment warnings before publishing or running.';
             publishBtn.title = gateTitle;
             runBtn.title = gateTitle;
         };
-
+        queueBtn.addEventListener('click', () => {
+            if (!session?.session_id) return;
+            view.close();
+            Router.navigate(`/ui/design-sessions?session_id=${encodeURIComponent(session.session_id)}`);
+        });
+        const renderSessionState = (nextSession, { progressMessage = 'Designing improved protocol…', readyMessage = 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.' } = {}) => {
+            session = nextSession;
+            if (session?.session_id) {
+                _rememberActiveAutoProtocolSession(session);
+            }
+            if (_autoProtocolPlanning(session)) {
+                intro.hidden = true;
+                requestLabel.hidden = true;
+                _setAutoProtocolStatus(status, progressMessage);
+                UI.reconcileChildren(preview, [_autoProtocolProgressEl(session)]);
+            } else if (session?.session_id) {
+                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
+                _setAutoProtocolStatus(status, _autoProtocolFinishedMessage(session, readyMessage));
+            }
+            syncActions();
+        };
+        const subscribeToSession = () => {
+            if (sessionSubscription) {
+                sessionSubscription();
+                sessionSubscription = null;
+            }
+            if (!session?.session_id || !_autoProtocolPlanning(session)) return;
+            sessionSubscription = _subscribeAutoProtocolSession(session.session_id, async (updated) => {
+                if (!view.dialog.isConnected) return;
+                renderSessionState(updated);
+            });
+        };
+        const refreshSessionState = async (options = {}) => {
+            if (!session?.session_id) return null;
+            const updated = await API.getProtocolAutoSession(session.session_id);
+            renderSessionState(updated, options);
+            subscribeToSession();
+            return session;
+        };
+        const attachSession = async (sessionId, options = {}) => {
+            const id = String(sessionId || '').trim();
+            if (!id) return null;
+            const updated = await API.getProtocolAutoSession(id);
+            if (options.requirePlanning && !_autoProtocolPlanning(updated)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
+            }
+            if (options.rememberedContext && !_autoProtocolSessionMatchesRememberedContext(updated, options.rememberedContext)) {
+                _rememberActiveAutoProtocolSession(null);
+                return null;
+            }
+            renderSessionState(updated, options);
+            subscribeToSession();
+            return session;
+        };
+        const waitForPlanning = async (options = {}) => {
+            const seq = ++planningWaitSeq;
+            subscribeToSession();
+            let current = session;
+            let polls = 0;
+            while (_autoProtocolPlanning(current) && view.dialog.isConnected && seq === planningWaitSeq) {
+                await _autoProtocolSleep(sessionSubscription ? 30000 : Math.min(10000, polls < 10 ? 3000 : 5000));
+                if (!view.dialog.isConnected || seq !== planningWaitSeq) return session;
+                current = await API.getProtocolAutoSession(current.session_id);
+                renderSessionState(current, options);
+                subscribeToSession();
+                polls += 1;
+            }
+            return session;
+        };
+        const handlePlanningError = async (err, options = {}) => {
+            if (!_autoProtocolPlanningError(err)) return false;
+            try {
+                await refreshSessionState(options);
+            } catch (refreshErr) {
+                console.warn('Failed to refresh Auto Protocol session after planning error', refreshErr);
+            }
+            UI.notify('Auto Protocol is still designing. The dialog reattached to the active planner job.', 'warning', { timeout: 0 });
+            return true;
+        };
         cancelBtn.addEventListener('click', () => view.close());
-        generateBtn.addEventListener('click', async () => {
+        const rememberedSessionId = activeAutoProtocolSessionId || _rememberedAutoProtocolSessionId();
+        if (rememberedSessionId) {
+            void attachSession(rememberedSessionId, {
+                requirePlanning: true,
+                rememberedContext: { sourceRunId: sourceRun.run.protocol_run_id },
+            }).catch((err) => {
+                console.warn('Could not reattach Auto Protocol session', err);
+            });
+        }
+        const runGenerateImprovement = async () => {
             const changeRequest = request.value.trim();
             if (!changeRequest) {
                 status.textContent = 'Describe what should improve.';
                 request.focus();
                 return;
             }
-            generateBtn.disabled = true;
+            _setAutoProtocolButtonBusy(generateBtn, true);
             intro.hidden = true;
             requestLabel.hidden = true;
             _setAutoProtocolStatus(status, 'Designing improved protocol…');
@@ -8973,58 +10644,102 @@ function renderProtocolRuns(container) {
                     mode: 'revise',
                     surface: 'registry',
                     target_protocol_id: sourceRun.run.protocol_id,
+                    source_run_id: sourceRun.run.protocol_run_id,
                     requirement_text: _runImprovementRequirement(sourceRun, changeRequest),
                     constraints_text: _runImprovementContext(sourceRun),
                     resource_refs: resourcePicker.resourceRefs(),
                     workspace_ref: sourceRun.run.workspace_ref || '',
+                    preferred_design_agent_id: plannerField.select.value,
                 });
-                UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.');
+                renderSessionState(session, { progressMessage: 'Designing improved protocol…' });
+                if (_autoProtocolPlanning(session)) {
+                    await waitForPlanning({
+                        progressMessage: 'Designing improved protocol…',
+                        readyMessage: 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.',
+                    });
+                } else {
+                    renderSessionState(session, { readyMessage: 'Review the generated improvement. Apply it to continue through the normal protocol lifecycle.' });
+                }
                 syncActions();
             } catch (err) {
-                intro.hidden = false;
-                requestLabel.hidden = false;
-                _setAutoProtocolDialogError(preview, status, 'Failed to generate the run improvement', err, () => generateBtn.click());
+                const attachedSessionId = _autoProtocolErrorSessionId(err);
+                if (attachedSessionId) {
+                    try {
+                        await attachSession(attachedSessionId);
+                    } catch (attachErr) {
+                        console.warn('Could not attach partially-created Auto Protocol session', attachErr);
+                    }
+                }
+                if (!session?.session_id) {
+                    intro.hidden = false;
+                    requestLabel.hidden = false;
+                }
+                const retry = (session?.session_id || attachedSessionId)
+                    ? () => refreshSessionState()
+                    : () => runGenerateImprovement();
+                _setAutoProtocolDialogError(preview, status, 'Failed to generate the run improvement', err, retry);
             }
-            generateBtn.disabled = false;
-        });
-        applyBtn.addEventListener('click', async () => {
+            _setAutoProtocolButtonBusy(generateBtn, false);
+            syncActions();
+        };
+        generateBtn.addEventListener('click', () => void runGenerateImprovement());
+        const runApplyImprovement = async () => {
             if (!session?.session_id) return;
-            applyBtn.disabled = true;
+            _setAutoProtocolButtonBusy(applyBtn, true);
             _setAutoProtocolStatus(status, 'Applying improved draft…');
             try {
-                session = await API.applyProtocolAutoSession(session.session_id);
+                const applied = await _autoProtocolRunAction(session.session_id, 'apply');
+                session = applied;
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
-                _setAutoProtocolStatus(status, 'Draft applied. Open the protocol editor to review or continue publishing from here.');
-                UI.notify('Improved protocol draft applied.', 'success');
-                syncActions();
+                const protocolId = _autoProtocolTargetProtocolId(applied);
+                if (protocolId) {
+                    view.close();
+                    UI.notify('Improved protocol draft applied.', 'success');
+                    Router.navigate(`/ui/protocols?protocol_id=${encodeURIComponent(protocolId)}`);
+                    return;
+                }
+                _setAutoProtocolStatus(status, 'Draft applied, but the protocol id was not returned.');
+                UI.notify('Draft applied, but the protocol id was not returned. Refresh protocols before continuing.', 'warning', { timeout: 0 });
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to apply improved protocol draft', err, () => applyBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(applyBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to apply improved protocol draft', err, () => runApplyImprovement());
             }
-            applyBtn.disabled = false;
-        });
-        publishBtn.addEventListener('click', async () => {
+            _setAutoProtocolButtonBusy(applyBtn, false);
+            syncActions();
+        };
+        applyBtn.addEventListener('click', () => void runApplyImprovement());
+        const runPublishImprovement = async () => {
             if (!session?.session_id) return;
-            publishBtn.disabled = true;
+            _setAutoProtocolButtonBusy(publishBtn, true);
             _setAutoProtocolStatus(status, 'Publishing improved protocol…');
             try {
-                session = await API.publishProtocolAutoSession(session.session_id);
+                session = await _autoProtocolRunAction(session.session_id, 'publish');
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 _setAutoProtocolStatus(status, 'Published. You can start a fresh run now.');
                 UI.notify('Improved protocol published.', 'success');
                 syncActions();
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to publish improved protocol', err, () => publishBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(publishBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to publish improved protocol', err, () => runPublishImprovement());
             }
-            publishBtn.disabled = false;
+            _setAutoProtocolButtonBusy(publishBtn, false);
             syncActions();
-        });
-        runBtn.addEventListener('click', async () => {
+        };
+        publishBtn.addEventListener('click', () => void runPublishImprovement());
+        const runStartImprovement = async () => {
             if (!session?.session_id) return;
-            runBtn.disabled = true;
+            _setAutoProtocolButtonBusy(runBtn, true);
             _setAutoProtocolStatus(status, 'Publishing and starting improved run…');
             try {
-                session = await API.runProtocolAutoSession(session.session_id, { origin_channel: 'registry' });
+                session = await _autoProtocolRunAction(session.session_id, 'run');
                 UI.reconcileChildren(preview, [_runImproveSummaryEl(session)]);
                 const runId = _runAutoSessionRunId(session);
                 view.close();
@@ -9035,11 +10750,17 @@ function renderProtocolRuns(container) {
                 }
                 UI.notify('Improved run started, but no run id was returned.', 'success');
             } catch (err) {
-                _setAutoProtocolDialogError(preview, status, 'Failed to run improved protocol', err, () => runBtn.click());
+                if (await handlePlanningError(err)) {
+                    _setAutoProtocolButtonBusy(runBtn, false);
+                    syncActions();
+                    return;
+                }
+                _setAutoProtocolDialogError(preview, status, 'Failed to run improved protocol', err, () => runStartImprovement());
             }
-            runBtn.disabled = false;
+            _setAutoProtocolButtonBusy(runBtn, false);
             syncActions();
-        });
+        };
+        runBtn.addEventListener('click', () => void runStartImprovement());
         syncActions();
     }
 
@@ -9808,6 +11529,32 @@ function renderProtocolRuns(container) {
                 problem.textContent = _compactRunText(run.problem_statement, 220);
                 main.appendChild(problem);
             }
+            const parentRunId = String(run.parent_protocol_run_id || '').trim();
+            const childRuns = (runs || [])
+                .filter((item) => String(item.parent_protocol_run_id || '').trim() === String(run.protocol_run_id || '').trim())
+                .slice(0, 4);
+            if (parentRunId || childRuns.length) {
+                const lineage = document.createElement('div');
+                lineage.className = 'run-focus-lineage';
+                if (parentRunId) {
+                    const parent = document.createElement('a');
+                    parent.href = _protocolRunHref(parentRunId);
+                    parent.textContent = `Forked from ${parentRunId.slice(0, 8)}`;
+                    lineage.appendChild(parent);
+                    if (run.fork_mode) {
+                        const mode = document.createElement('span');
+                        mode.textContent = String(run.fork_mode || '').replace(/_/g, ' ');
+                        lineage.appendChild(mode);
+                    }
+                }
+                childRuns.forEach((child) => {
+                    const childLink = document.createElement('a');
+                    childLink.href = _protocolRunHref(child.protocol_run_id);
+                    childLink.textContent = `Child ${String(child.protocol_run_id || '').slice(0, 8)}`;
+                    lineage.appendChild(childLink);
+                });
+                main.appendChild(lineage);
+            }
             hero.appendChild(main);
 
             const state = document.createElement('div');
@@ -10064,7 +11811,7 @@ function renderProtocolRuns(container) {
                 const issueList = document.createElement('div');
                 issueList.className = 'run-evidence-issue-list';
                 UI.reconcileChildren(issueList, stageIssues.map((issue) => UI.renderListRow({
-                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || 'issue'}`,
+                    label: `${_protocolIssueLabel(issue.issue_kind)} · ${issue.issue_code || 'issue'}`,
                     sublabel: issue.issue_detail || issue.updated_at || '',
                     badgeText: issue.stage_key || '',
                     badgeClass: 'badge-blocked',
@@ -10157,6 +11904,18 @@ function renderProtocolRuns(container) {
                 openConversation.textContent = 'Open activity';
                 actions.appendChild(openConversation);
             }
+            const rerunFork = document.createElement('button');
+            rerunFork.type = 'button';
+            rerunFork.className = 'btn btn-sm';
+            rerunFork.textContent = 'Rerun from here';
+            rerunFork.addEventListener('click', () => _openForkRunDialog(item, 'rerun_selected'));
+            actions.appendChild(rerunFork);
+            const continueFork = document.createElement('button');
+            continueFork.type = 'button';
+            continueFork.className = 'btn btn-sm';
+            continueFork.textContent = 'Continue after';
+            continueFork.addEventListener('click', () => _openForkRunDialog(item, 'continue_after'));
+            actions.appendChild(continueFork);
             if (actions.childElementCount) {
                 card.appendChild(actions);
             }
@@ -10173,7 +11932,7 @@ function renderProtocolRuns(container) {
                 const issueSummary = document.createElement('div');
                 issueSummary.className = 'run-evidence-issue-list';
                 UI.reconcileChildren(issueSummary, currentIssues.slice(0, 3).map((issue) => UI.renderListRow({
-                    label: `${String(issue.issue_kind || '').replace(/_/g, ' ')} · ${issue.issue_code || issue.stage_key || 'issue'}`,
+                    label: `${_protocolIssueLabel(issue.issue_kind)} · ${issue.issue_code || issue.stage_key || 'issue'}`,
                     sublabel: issue.issue_detail || issue.updated_at || '',
                     badgeText: issue.stage_key || '',
                     badgeClass: 'badge-blocked',
@@ -10221,6 +11980,54 @@ function renderProtocolRuns(container) {
                         renderRunsRoute();
                     },
                 }));
+            }
+            const autoMeta = currentRun.version?.definition_json?.metadata?.auto_protocol || {};
+            const contract = autoMeta.acceptance_contract || {};
+            if (Number(contract.schema_version || 0) >= 2 || autoMeta.contract_required) {
+                const contractKey = String(contract.contract_artifact_key || 'auto_protocol_contract').trim();
+                const productDomainKey = String(contract.product_domain_contract_artifact_key || 'product_domain_contract').trim();
+                const producerManifestKey = String(contract.producer_manifest_artifact_key || 'producer_evidence_manifest').trim();
+                const reviewerManifestKey = String(contract.reviewer_manifest_artifact_key || 'reviewer_evidence_manifest').trim();
+                const findArtifact = (key) => artifactRows.find((item) => String(item.artifact_key || '').trim() === key) || null;
+                const missingEvidence = _missingEvidenceList(currentRun);
+                const evidenceMatrix = _evidenceMatrixEl(currentRun, { limit: 8 });
+                const contractBox = document.createElement('div');
+                contractBox.className = 'run-evidence-issue-list';
+                contractBox.appendChild(UI.renderListRow({
+                    label: 'Auto Protocol product/system contract',
+                    sublabel: [
+                        String(autoMeta.product_class || contract.product_class || '').trim() ? `Product class: ${autoMeta.product_class || contract.product_class}` : '',
+                        contract.contract_required || autoMeta.contract_required ? 'Full contract mode' : 'Contract metadata present',
+                    ].filter(Boolean).join(' · '),
+                    badgeText: 'v2',
+                    badgeClass: 'badge-connected',
+                }));
+                [
+                    [productDomainKey, 'Product/domain contract'],
+                    [contractKey, 'Authoritative contract'],
+                    [producerManifestKey, 'Producer evidence manifest'],
+                    [reviewerManifestKey, 'Reviewer evidence manifest'],
+                ].forEach(([key, label]) => {
+                    const artifact = findArtifact(key);
+                    contractBox.appendChild(UI.renderListRow({
+                        label,
+                        sublabel: artifact
+                            ? [_protocolArtifactLabel(artifact), _protocolArtifactDisplayPath(artifact)].filter(Boolean).join(' · ')
+                            : `Missing artifact ${key}`,
+                        badgeText: artifact ? 'available' : 'missing',
+                        badgeClass: artifact ? 'badge-connected' : 'badge-blocked',
+                    }));
+                });
+                if (missingEvidence.length) {
+                    contractBox.appendChild(UI.renderListRow({
+                        label: `${missingEvidence.length} evidence item${missingEvidence.length === 1 ? '' : 's'} still required`,
+                        sublabel: missingEvidence.slice(0, 4).join(' · '),
+                        badgeText: 'blocked',
+                        badgeClass: 'badge-blocked',
+                    }));
+                }
+                if (evidenceMatrix) contractBox.appendChild(evidenceMatrix);
+                section.appendChild(contractBox);
             }
             return section;
         };
@@ -10451,6 +12258,7 @@ function renderProtocolRuns(container) {
             packageSummary.appendChild(packageCopy);
             const moreDetails = document.createElement('details');
             moreDetails.className = 'run-primary-package-details';
+            _bindRunDisclosure(moreDetails, 'evidence-paths');
             const moreDetailsSummary = document.createElement('summary');
             moreDetailsSummary.textContent = 'Evidence and paths';
             moreDetails.appendChild(moreDetailsSummary);
@@ -10497,6 +12305,7 @@ function renderProtocolRuns(container) {
                 if (lifecycleSpecs.length) {
                     const moreOptions = document.createElement('details');
                     moreOptions.className = 'run-primary-more-options';
+                    _bindRunDisclosure(moreOptions, 'more-run-options');
                     const moreOptionsSummary = document.createElement('summary');
                     moreOptionsSummary.textContent = 'More run options';
                     moreOptions.appendChild(moreOptionsSummary);
@@ -10625,6 +12434,7 @@ function renderProtocolRuns(container) {
         if (primaryArtifactPanel && primaryOwnsRunStory) {
             const stageHistory = document.createElement('details');
             stageHistory.className = 'run-stage-history-disclosure';
+            _bindRunDisclosure(stageHistory, 'stage-history');
             const summary = document.createElement('summary');
             summary.textContent = `Stage history (${stageRows.length || stageAttemptsByKey.size})`;
             stageHistory.appendChild(summary);
@@ -10636,6 +12446,7 @@ function renderProtocolRuns(container) {
 
         const auditDetails = document.createElement('details');
         auditDetails.className = 'run-audit-disclosure';
+        _bindRunDisclosure(auditDetails, 'audit');
         const auditSummary = document.createElement('summary');
         auditSummary.textContent = 'Audit and troubleshooting';
         auditDetails.appendChild(auditSummary);
@@ -10680,16 +12491,31 @@ function renderProtocolRuns(container) {
 
             const issueDetailList = document.createElement('div');
             const issueDetailRows = (currentIssues || []).map((item) => UI.renderListRow({
-                label: `${String(item.issue_kind || '').replace(/_/g, ' ')} · ${item.issue_code || item.stage_key || 'issue'}`,
+                label: `${_protocolIssueLabel(item.issue_kind)} · ${item.issue_code || item.stage_key || 'issue'}`,
                 sublabel: item.issue_detail || item.updated_at || '',
                 badgeText: item.stage_key || '',
             }));
             appendSectionTitle(sectionPanel, 'Support issues');
-            UI.reconcileChildren(
-                issueDetailList,
-                issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)],
-            );
+            UI.reconcileChildren(issueDetailList, issueDetailRows.length ? issueDetailRows : [UI.renderEmptyState('No protocol issues detected for this run.', true)]);
             sectionPanel.appendChild(issueDetailList);
+            if ((currentIssues || []).length) {
+                const issueFacts = document.createElement('div');
+                issueFacts.className = 'run-evidence-issue-list';
+                UI.reconcileChildren(issueFacts, (currentIssues || []).map((item) => {
+                    const card = document.createElement('article');
+                    card.className = 'protocol-lineage-card';
+                    card.appendChild(UI.renderMetadataGrid([
+                        { label: 'Issue', value: `${_protocolIssueLabel(item.issue_kind)} · ${item.issue_code || item.stage_key || 'issue'}` },
+                        { label: 'Run state', value: item.run_status || '—' },
+                        { label: 'Stage state', value: item.stage_status || '—' },
+                        { label: 'Lease expiry', value: item.lease_expires_at || '—' },
+                        { label: 'Timeout', value: item.timeout_at || '—' },
+                        { label: 'Last issue update', value: item.updated_at ? `${item.updated_at} (${UI.relativeTime(item.updated_at)})` : '—' },
+                    ], { compact: true }));
+                    return card;
+                }));
+                sectionPanel.appendChild(issueFacts);
+            }
         }
         auditDetails.appendChild(sectionPanel);
         detailPanel.appendChild(auditDetails);

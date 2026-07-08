@@ -331,6 +331,8 @@ class WorkflowComposer:
             "artifact_runtime_health",
             "artifact_runtime_logs",
             "artifact_runtime_fetch",
+            "run_artifact_journey",
+            "cancel_routed_task",
             "workspace_usage",
             "workspace_cleanup",
         ])

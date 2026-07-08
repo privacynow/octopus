@@ -309,9 +309,12 @@ CREATE TABLE IF NOT EXISTS agent_registry.management_requests (
     result_json JSONB,
     error_code TEXT NOT NULL DEFAULT '',
     error_detail TEXT NOT NULL DEFAULT '',
+    timeout_seconds INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     completed_at TEXT NOT NULL DEFAULT ''
 );
+ALTER TABLE agent_registry.management_requests
+    ADD COLUMN IF NOT EXISTS timeout_seconds INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_registry_management_requests_agent_status
     ON agent_registry.management_requests (target_agent_id, status, created_at);
 
@@ -549,7 +552,11 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_runs (
     last_transition_at TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    completed_at TEXT NOT NULL DEFAULT ''
+    completed_at TEXT NOT NULL DEFAULT '',
+    parent_protocol_run_id TEXT NOT NULL DEFAULT '',
+    parent_stage_execution_id TEXT NOT NULL DEFAULT '',
+    fork_mode TEXT NOT NULL DEFAULT '',
+    fork_reason TEXT NOT NULL DEFAULT ''
 );
 ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS source_kind TEXT NOT NULL DEFAULT 'protocol_run',
@@ -561,7 +568,11 @@ ALTER TABLE agent_registry.protocol_runs
     ADD COLUMN IF NOT EXISTS version INTEGER NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS retention_until TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS last_transition_at TEXT NOT NULL DEFAULT '',
-    ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE;
+    ADD COLUMN IF NOT EXISTS is_rehearsal BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS parent_protocol_run_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS parent_stage_execution_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS fork_mode TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS fork_reason TEXT NOT NULL DEFAULT '';
 ALTER TABLE agent_registry.protocol_runs
     ALTER COLUMN hidden_from_default_views SET DEFAULT FALSE;
 UPDATE agent_registry.protocol_runs
@@ -599,6 +610,9 @@ CREATE INDEX IF NOT EXISTS idx_protocol_runs_org_status_updated
 CREATE INDEX IF NOT EXISTS idx_protocol_runs_blocked_code_updated
     ON agent_registry.protocol_runs (blocked_code, updated_at DESC)
     WHERE blocked_code <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_runs_parent
+    ON agent_registry.protocol_runs (parent_protocol_run_id, updated_at DESC)
+    WHERE parent_protocol_run_id <> '';
 
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_scenarios (
     protocol_scenario_id TEXT PRIMARY KEY,
@@ -704,7 +718,8 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_artifact_snapshots (
     created_at TEXT NOT NULL,
     created_by TEXT NOT NULL DEFAULT '',
     deleted_at TEXT NOT NULL DEFAULT '',
-    deleted_by TEXT NOT NULL DEFAULT ''
+    deleted_by TEXT NOT NULL DEFAULT '',
+    produced_by_stage_execution_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_run
     ON agent_registry.protocol_artifact_snapshots (protocol_run_id, artifact_key, created_at DESC);
@@ -780,6 +795,34 @@ CREATE INDEX IF NOT EXISTS idx_protocol_artifact_runtime_events_instance
 CREATE INDEX IF NOT EXISTS idx_protocol_artifact_runtime_events_run
     ON agent_registry.protocol_artifact_runtime_events (protocol_run_id, artifact_key, created_at DESC);
 
+CREATE TABLE IF NOT EXISTS agent_registry.protocol_runtime_capability_tokens (
+    capability_token_id TEXT PRIMARY KEY,
+    capability_ref_hash TEXT NOT NULL UNIQUE,
+    bearer_token_hash TEXT NOT NULL DEFAULT '',
+    protocol_run_id TEXT NOT NULL,
+    protocol_stage_execution_id TEXT NOT NULL,
+    artifact_key TEXT NOT NULL DEFAULT '',
+    participant_key TEXT NOT NULL DEFAULT '',
+    target_agent_id TEXT NOT NULL DEFAULT '',
+    allowed_actions_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    expires_at TEXT NOT NULL,
+    revoked_at TEXT NOT NULL DEFAULT '',
+    exchange_count INTEGER NOT NULL DEFAULT 0,
+    max_exchange_count INTEGER NOT NULL DEFAULT 5,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    actor_ref TEXT NOT NULL DEFAULT ''
+);
+ALTER TABLE agent_registry.protocol_runtime_capability_tokens
+    DROP CONSTRAINT IF EXISTS protocol_runtime_capability_tokens_bearer_token_hash_key;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_bearer_hash
+    ON agent_registry.protocol_runtime_capability_tokens (bearer_token_hash)
+    WHERE bearer_token_hash <> '';
+CREATE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_stage
+    ON agent_registry.protocol_runtime_capability_tokens (protocol_stage_execution_id, revoked_at, expires_at);
+CREATE INDEX IF NOT EXISTS idx_protocol_runtime_capability_tokens_run_artifact
+    ON agent_registry.protocol_runtime_capability_tokens (protocol_run_id, artifact_key, revoked_at, expires_at);
+
 CREATE TABLE IF NOT EXISTS agent_registry.protocol_transitions (
     protocol_transition_id TEXT PRIMARY KEY,
     protocol_run_id TEXT NOT NULL,
@@ -826,6 +869,12 @@ ALTER TABLE agent_registry.protocol_artifacts
     ADD COLUMN IF NOT EXISTS observed_at TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS verification_state TEXT NOT NULL DEFAULT 'declared';
 
+ALTER TABLE agent_registry.protocol_artifact_snapshots
+    ADD COLUMN IF NOT EXISTS produced_by_stage_execution_id TEXT NOT NULL DEFAULT '';
+CREATE INDEX IF NOT EXISTS idx_protocol_artifact_snapshots_stage
+    ON agent_registry.protocol_artifact_snapshots (produced_by_stage_execution_id, artifact_key, created_at DESC)
+    WHERE produced_by_stage_execution_id <> '' AND retention_state <> 'deleted';
+
 ALTER TABLE agent_registry.protocol_transitions
     ADD COLUMN IF NOT EXISTS error_code TEXT NOT NULL DEFAULT '',
     ADD COLUMN IF NOT EXISTS metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb;
@@ -853,11 +902,20 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
     source_protocol_id TEXT NOT NULL DEFAULT '',
     source_version_id TEXT NOT NULL DEFAULT '',
     source_draft_revision INTEGER NOT NULL DEFAULT 0,
+    source_run_id TEXT NOT NULL DEFAULT '',
     target_protocol_id TEXT NOT NULL DEFAULT '',
     target_draft_revision INTEGER NOT NULL DEFAULT 0,
     requirement_text TEXT NOT NULL DEFAULT '',
     constraints_text TEXT NOT NULL DEFAULT '',
     resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    planner_request_id TEXT NOT NULL DEFAULT '',
+    planner_task_id TEXT NOT NULL DEFAULT '',
+    planner_policy TEXT NOT NULL DEFAULT 'auto_select',
+    planner_agent_id TEXT NOT NULL DEFAULT '',
+    planner_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    prompt_diagnostics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     analysis_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     plan_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -874,7 +932,26 @@ CREATE TABLE IF NOT EXISTS agent_registry.protocol_auto_sessions (
 );
 ALTER TABLE agent_registry.protocol_auto_sessions
     ADD COLUMN IF NOT EXISTS planner_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ADD COLUMN IF NOT EXISTS source_run_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS run_lessons_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD COLUMN IF NOT EXISTS planner_request_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_task_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_policy TEXT NOT NULL DEFAULT 'auto_select',
+    ADD COLUMN IF NOT EXISTS planner_agent_id TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS planner_state_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS prompt_diagnostics_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS source_document_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+UPDATE agent_registry.protocol_auto_sessions
+SET status = 'failed',
+    planner_state_json = COALESCE(planner_state_json, '{}'::jsonb) || jsonb_build_object(
+        'planner_status', 'failed',
+        'progress_summary', 'Legacy Auto Protocol planner request cannot be completed after routed-task planner migration. Retry the design session.',
+        'completed_at', CURRENT_TIMESTAMP::TEXT
+    ),
+    updated_at = CURRENT_TIMESTAMP::TEXT
+WHERE status = 'planning'
+  AND COALESCE(planner_task_id, '') = '';
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_actor
     ON agent_registry.protocol_auto_sessions (actor_ref, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_protocol_auto_sessions_target

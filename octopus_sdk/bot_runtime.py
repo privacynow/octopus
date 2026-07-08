@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
+import logging
 import re
 import signal
 import time
@@ -33,7 +35,8 @@ from octopus_sdk.inbound_types import InboundCallback
 from octopus_sdk.inbound_types import InboundCommand
 from octopus_sdk.inbound_types import InboundEnvelope, InboundMessage, InboundUser, deserialize_inbound, serialize_inbound
 from octopus_sdk.messages import MessageTemplatePort
-from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, Provider, ProviderStateRecord, RunContext
+from octopus_sdk.protocols.auto_design import ProtocolAutoDesignModelRequestRecord, ProtocolAutoDesignModelResponseRecord
+from octopus_sdk.providers import CredentialEnvRecord, PreflightContext, ProgressSink, Provider, ProviderStateRecord, RunContext
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.runtime.skills import (
@@ -76,6 +79,7 @@ from octopus_sdk.workflows.skills import (
 )
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
+log = logging.getLogger(__name__)
 
 
 @runtime_checkable
@@ -270,6 +274,27 @@ class ExecutionFaultStatePort(Protocol):
 
 
 @runtime_checkable
+class RuntimeCapabilityExchangePort(Protocol):
+    async def exchange_runtime_capability(
+        self,
+        *,
+        authority_ref: str,
+        capability_ref: str,
+    ) -> str: ...
+
+
+@runtime_checkable
+class AutoDesignPlannerPort(Protocol):
+    async def design_auto_protocol(
+        self,
+        request: ProtocolAutoDesignModelRequestRecord,
+        *,
+        progress: ProgressSink,
+        cancel: asyncio.Event | None = None,
+    ) -> ProtocolAutoDesignModelResponseRecord: ...
+
+
+@runtime_checkable
 class ControlPlanePort(Protocol):
     conversation_projection: ConversationProjectionPort
     task_routing: TaskRoutingPort
@@ -290,6 +315,7 @@ class ExecutionServices:
     agent_directory: AgentDirectoryPort | None = None
     conversation_projection: ConversationProjectionPort | None = None
     agent_awareness: AgentAwarenessPort | None = None
+    runtime_capabilities: RuntimeCapabilityExchangePort | None = None
 
 
 @dataclass(frozen=True)
@@ -429,6 +455,7 @@ class BotRuntime:
     allow_test_mode: bool = False
     cancellations: MutableMapping[str, asyncio.Event] = field(default_factory=dict)
     execution_inflight: MutableSet[str] = field(default_factory=set)
+    auto_design_planner: AutoDesignPlannerPort | None = None
 
     async def submit(
         self,
@@ -868,6 +895,112 @@ class BotRuntime:
             ),
         )
 
+    def _auto_design_context(self, event: InboundMessage) -> dict[str, object]:
+        if not str(getattr(event, "routed_task_id", "") or "").strip():
+            return {}
+        try:
+            context = json.loads(str(getattr(event, "context_text", "") or "{}"))
+        except Exception:
+            return {}
+        if not isinstance(context, dict):
+            return {}
+        if str(context.get("task_source_kind") or context.get("source_kind") or "") != "auto_design":
+            return {}
+        auto_design = context.get("auto_design", {})
+        return auto_design if isinstance(auto_design, dict) else {}
+
+    async def _dispatch_auto_design_routed_task(
+        self,
+        event: InboundMessage,
+        item: WorkItemRecord,
+        *,
+        cancel_event: asyncio.Event | None,
+    ) -> bool:
+        auto_design = self._auto_design_context(event)
+        if not auto_design:
+            return False
+        routed_task_id = str(getattr(event, "routed_task_id", "") or "")
+        authority_ref = str(getattr(event, "authority_ref", "") or "")
+        if self.control_plane is None or not routed_task_id or not authority_ref:
+            raise RuntimeError("Auto Protocol planner task requires registry task routing.")
+
+        async def update_status(summary: str, *, progress: int | None = None, force: bool = False) -> None:
+            del force
+            await self.control_plane.task_routing.update_routed_task_status(
+                update=RoutedTaskUpdate(
+                    routed_task_id=routed_task_id,
+                    status="running",
+                    transition_id=uuid4().hex,
+                    summary=summarize_text(summary, limit=220) or "Auto Protocol planner is running.",
+                    progress=progress,
+                ),
+                authority_ref=authority_ref,
+            )
+
+        class _TaskProgress:
+            def __init__(self) -> None:
+                self._last_update = 0.0
+                self._progress = 1
+
+            async def update(self, html_text: str, *, force: bool = False) -> None:
+                now = asyncio.get_running_loop().time()
+                if not force and self._last_update and now - self._last_update < 10.0:
+                    return
+                self._last_update = now
+                self._progress = min(95, self._progress + 3)
+                text = html.unescape(_HTML_TAG_RE.sub(" ", html_text or ""))
+                await update_status(
+                    text or "Auto Protocol planner is running.",
+                    progress=self._progress,
+                )
+
+        await update_status("Auto Protocol planner started.", progress=1)
+        try:
+            if self.auto_design_planner is None:
+                raise RuntimeError("Auto Protocol planner execution is not configured for this runtime.")
+            request_payload = auto_design.get("request", {})
+            request = ProtocolAutoDesignModelRequestRecord.model_validate(request_payload)
+            response = await self.auto_design_planner.design_auto_protocol(
+                request,
+                progress=_TaskProgress(),
+                cancel=cancel_event,
+            )
+            await self.control_plane.task_routing.report_routed_task_result(
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=RoutedTaskResult(
+                    routed_task_id=routed_task_id,
+                    status="completed",
+                    transition_id=uuid4().hex,
+                    summary="Auto Protocol planner completed.",
+                    full_text=response.model_dump_json(),
+                    artifacts=[],
+                    follow_up_questions=(),
+                    provider=self.provider.name,
+                    working_dir=str(getattr(self.config, "working_dir", "") or ""),
+                ),
+            )
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self.control_plane.task_routing.report_routed_task_result(
+                routed_task_id=routed_task_id,
+                authority_ref=authority_ref,
+                result=RoutedTaskResult(
+                    routed_task_id=routed_task_id,
+                    status="failed",
+                    transition_id=uuid4().hex,
+                    summary="Auto Protocol planner failed.",
+                    full_text=str(exc),
+                    artifacts=[],
+                    follow_up_questions=(),
+                    provider=self.provider.name,
+                    working_dir=str(getattr(self.config, "working_dir", "") or ""),
+                ),
+            )
+            return True
+
     def _build_transport_identity(
         self,
         *,
@@ -879,6 +1012,13 @@ class BotRuntime:
 
         authority_ref = str(getattr(event, "authority_ref", "") or "")
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
+        stage_contract = getattr(event, "protocol_stage_contract", {}) or {}
+        timeout_seconds = 0
+        if isinstance(stage_contract, dict):
+            try:
+                timeout_seconds = max(0, int(stage_contract.get("timeout_seconds") or 0))
+            except (TypeError, ValueError):
+                timeout_seconds = 0
         return build_transport_identity_from_metadata(
             ExecutionChannelMetadata(
                 conversation_key=str(getattr(event, "conversation_key", "") or ""),
@@ -890,11 +1030,13 @@ class BotRuntime:
                 authority_ref=authority_ref,
                 external_conversation_ref=str(getattr(event, "external_conversation_ref", "") or ""),
                 target_agent_id=self._target_agent_id_for_authority(authority_ref),
+                runtime_capability_ref=str(getattr(event, "runtime_capability_ref", "") or ""),
                 requested_skills=tuple(
                     str(skill).strip().lower()
                     for skill in getattr(event, "requested_skills", ())
                     if str(skill).strip()
                 ),
+                execution_timeout_seconds=timeout_seconds,
             ),
             conversation_callback_factory=lambda _conversation_ref, _routed_task_id: self._noop_timeline_callback,
             routed_task_callback_factory=lambda task_id, auth_ref: (
@@ -1610,6 +1752,13 @@ class BotRuntime:
         routed_task_id = str(getattr(event, "routed_task_id", "") or "")
         authority_ref = str(getattr(event, "authority_ref", "") or "")
 
+        if routed_task_id and await self._dispatch_auto_design_routed_task(
+            event,
+            item,
+            cancel_event=cancel_event,
+        ):
+            return
+
         if item.dispatch_mode == "recovery":
             if routed_task_id:
                 await self._report_interrupted_routed_task_recovery(
@@ -1789,6 +1938,27 @@ class BotRuntime:
         message = self.workflows.messages.recovery_orphaned_command(detail)
         await egress.send_text(message)
 
+    async def _notify_direct_message_dispatch_failure(
+        self,
+        event: InboundMessage | InboundCommand | InboundCallback | InboundAction,
+        item: WorkItemRecord,
+    ) -> None:
+        if not isinstance(event, InboundMessage):
+            return
+        if str(getattr(event, "routed_task_id", "") or "").strip():
+            return
+        if str(getattr(event, "admission_class", "external") or "external") == "internal":
+            return
+        try:
+            egress, _conversation_ref = self._build_worker_egress(event, item)
+            await egress.send_text(self.workflows.messages.recovery_error_try_again())
+        except Exception:
+            log.debug(
+                "Could not notify user about dispatch failure for work item %s",
+                item.id,
+                exc_info=True,
+            )
+
     async def _dispatch_claimed_item(
         self,
         kind: str,
@@ -1826,10 +1996,6 @@ class BotRuntime:
         item: WorkItemRecord,
         runner: Callable[[asyncio.Event | None], Awaitable[None]],
     ) -> None:
-        if self.config.runtime_mode != "shared":
-            await runner(None)
-            return
-
         cancel_event = asyncio.Event()
 
         async def _poll_cancel_requested() -> None:
@@ -1965,6 +2131,14 @@ class BotRuntime:
                             raise
                         except Exception:
                             last_error = "dispatch_exception"
+                            log.exception(
+                                "Dispatch failed for work item %s kind=%s conversation=%s event=%s",
+                                item_id,
+                                current_kind,
+                                current_conversation_key,
+                                item.event_id,
+                            )
+                            await self._notify_direct_message_dispatch_failure(event, item)
                             self.work_queue.fail_work_item(
                                 self.config.data_dir,
                                 item_id,
@@ -2074,7 +2248,9 @@ class ProviderDispatchRuntime:
             r"api[_-]?key|token|secret|password|passwd|authorization|credential"
             r")(\s*[:=]\s*)([^\s,;]+)"
         )
+        runtime_token_re = re.compile(r"oct-rt-[A-Za-z0-9_-]+")
         text = secret_re.sub(r"\1\2<redacted>", text)
+        text = runtime_token_re.sub("<runtime-token>", text)
         text = path_re.sub("<path>", text)
         limit = 1500
         if len(text) > limit:

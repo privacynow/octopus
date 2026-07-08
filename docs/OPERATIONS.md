@@ -141,6 +141,31 @@ to one of `low`, `medium`, `high`, `xhigh`, or `max` to pass the Claude CLI
 (multi-agent workflow orchestration; implies `xhigh` effort unless
 `CLAUDE_EFFORT` overrides it).
 
+Auto Protocol design is expected to be heavyweight. The Registry stores a
+`planning` session and queues a hidden `auto_design` routed task to a
+provider-capable bot; the browser watches the session topic rather than holding
+one long request open. If a design appears stuck, open `Build -> Designs` and
+check the Auto Protocol session status, the linked routed task, the assigned
+planner agent, the last progress timestamp, and the target bot/provider logs.
+A provider timeout or planner-task timeout should surface as
+a failed session with planner details, not as a transient dialog that vanishes
+before the operator can read it.
+New `design_auto_protocol` work is not accepted on the management channel; bots
+return `auto_design_requires_routed_task` so planner execution stays on the
+queued routed-task path.
+Historical sessions may still display an old planner request id, but active
+planning completion is routed-task only. Legacy management-request planner
+results are not compiled by reads or maintenance sweeps.
+
+After publish/run, serious Auto Protocol stages use a timeout derived from the
+generated Auto Protocol metadata and carried in their runtime contract, not just
+`BOT_TIMEOUT_SECONDS`. Generated drafts persist `timeout_seconds: 0` unless an
+operator explicitly authored a timeout; the stage row `timeout_at`, maintenance
+sweep, and bot runtime contract all use the same derived value. A generated
+contract/outcome stage timing out means the provider exceeded that stage budget
+or stopped making progress; inspect the linked routed task, task age, stage
+artifacts, and provider logs before retrying or sending back.
+
 If the host URL or public URL is wrong, redeploy the Registry with the intended
 address and restart bots so generated links and local bot connection metadata
 are refreshed:
@@ -217,6 +242,18 @@ For a protocol run, inspect:
 The user should be able to understand what ran, who executed each stage, which
 files were expected, which files were produced, and what remains blocked.
 
+For recovery checks, also verify:
+
+- blocked acceptance shows a persistent missing-evidence panel instead of a
+  disappearing success toast
+- `Expired write lease` is shown as lease expiry, not provider death
+- `Interrupt` blocks the current stage and queues provider cancellation for the
+  assigned bot when work is running
+- late provider results after interrupt, timeout, or cancel appear as audit/task
+  metadata only
+- forked child runs show parent links, run-scoped workspace paths, and copied
+  snapshot artifacts
+
 ## Artifact Handoff
 
 For every customer-relevant artifact:
@@ -286,9 +323,43 @@ Common issue responses:
 | `artifact_missing` | Inspect producing stage output and artifact metadata. |
 | `artifact_integrity_failed` | Inspect hash, path, and verification. |
 | `participant_resolution_failed` | Inspect stage assignment and connected agents. |
+| `stuck_lease` | Inspect lease expiry, task age, timeout, and latest task update. The UI label is `Expired write lease`. |
 | `lease_held` | Inspect active or stale work lease. |
 | `stage_timeout` | Inspect worker health and provider result. |
 | `max_review_rounds_exceeded` | Decide whether to accept, send back, or cancel. |
+| `runtime_evidence_required` | Start or open the runtime, run health, exercise required journeys, inspect backend/API/provider/state evidence, and read the missing evidence list. |
+| `operator_interrupted` | Retry, send back, cancel, or fork after confirming whether cancellation reached the bot. |
+
+Scoped runtime capability tokens are internal execution credentials. Stage
+prompts carry a `capability_ref` and `$OCTOPUS_CAPABILITY_TOKEN` placeholders,
+not plaintext bearer tokens. Bots exchange the reference with their enrolled
+agent token when the stage starts, inject the scoped bearer into the provider
+subprocess environment, and revoke it on stage completion, retry, interrupt, or
+cancel. Full agent tokens should not directly authorize scoped runtime or
+journey routes outside retained internal management/exchange paths.
+
+For structured journey evidence, verify that the bot image contains the browser
+runtime, the artifact has `octopus-runtime.json.test_hooks`, the runner targets
+the Registry-routed artifact origin, and journey result events appear on the
+run before final acceptance. Contract-bearing protocols should not complete
+from reviewer prose alone or from uncorrelated `journey_completed` events. The
+operator `Re-run journey` control queues bot work and returns immediately; use
+the run updates/runtime event list to confirm the later pass or failure.
+
+For v2 Auto Protocol contracts, also verify that the latest
+`product_domain_contract` snapshot was produced by
+`produce_product_domain_contract` and reviewed by
+`review_product_domain_contract`, and that the latest `auto_protocol_contract`
+snapshot was produced by `produce_system_verification_contract`, reviewed by
+`review_system_verification_contract`, and references that product/domain
+snapshot by artifact key, content hash, and producing stage execution id. The
+final `reviewer_evidence_manifest` must be produced by `final_evidence`, match
+the current primary artifact hash, and include required Tier 1, Tier 2, and Tier
+3 items. API probes should have matching Registry fetch events; DB invariants,
+provider mocks, state-machine checks, and security checks should come from the
+expected reviewer stage rather
+than the producer. Domain-source notes are advisory and should not be treated as
+proof that runtime/API behavior works.
 
 ## Cleanup
 

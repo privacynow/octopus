@@ -77,7 +77,9 @@ def test_protocol_run_engine_dispatch_preflight_blocks_active_write_lease() -> N
 
 
 def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> None:
-    document = _document()
+    raw_document = protocol_document()
+    raw_document["stages"][0]["timeout_seconds"] = 7200
+    document = canonical_protocol_document(raw_document)
     run = _run().model_copy(
         update={
             "entry_agent_id": "agent-1",
@@ -108,7 +110,85 @@ def test_protocol_run_engine_builds_dispatch_request_from_shared_contract() -> N
     assert request.project_id_override == "workspace-a"
     assert request.context["protocol_run_id"] == "run-1"
     assert request.internal_context["protocol_stage_contract"]["stage_key"] == "planning"
+    assert request.internal_context["protocol_stage_contract"]["timeout_seconds"] == 7200
     assert request.requested_skills == ["planning"]
+
+
+def test_protocol_run_engine_applies_generated_runtime_timeout_fallback() -> None:
+    raw_document = protocol_document()
+    raw_document["metadata"]["auto_protocol"] = {
+        "generated": True,
+        "primary_artifact": {"open_behavior": "runtime"},
+        "acceptance_contract": {"schema_version": 1},
+    }
+    raw_document["stages"][0]["timeout_seconds"] = 0
+    document = canonical_protocol_document(raw_document)
+    run = _run().model_copy(
+        update={
+            "entry_agent_id": "agent-1",
+            "root_conversation_id": "conv-1",
+            "protocol_definition_version_id": "version-1",
+        }
+    )
+    stage = document.stage("planning")
+    participant = document.participant(stage.participant_key)
+
+    request = _engine().build_dispatch_request(
+        document=document,
+        run=run,
+        stage=stage,
+        participant=participant,
+        stage_execution_id="planning-exec",
+        target_agent_id="agent-2",
+        artifacts=[],
+        previous_feedback="",
+        now="2026-04-16T00:00:00+00:00",
+    )
+
+    assert request.internal_context["protocol_stage_contract"]["timeout_seconds"] == 14_400
+
+
+def test_protocol_run_engine_dispatch_preflight_derives_generated_runtime_timeout() -> None:
+    raw_document = protocol_document()
+    raw_document["metadata"]["auto_protocol"] = {
+        "generated": True,
+        "primary_artifact": {"open_behavior": "runtime"},
+        "acceptance_contract": {"schema_version": 1},
+    }
+    raw_document["stages"][0]["timeout_seconds"] = 0
+    document = canonical_protocol_document(raw_document)
+
+    decision = _engine().dispatch_preflight(
+        document=document,
+        run=_run(),
+        stage=document.stage("planning"),
+        stage_executions=[],
+        now="2026-04-16T00:00:00+00:00",
+        lease_owner="stage-current",
+        lease_ttl_seconds=900,
+    )
+
+    assert decision.ok is True
+    assert decision.timeout_at == "2026-04-16T04:00:00+00:00"
+
+
+def test_protocol_run_engine_dispatch_preflight_honors_explicit_timeout() -> None:
+    raw_document = protocol_document()
+    raw_document["stages"][0]["timeout_seconds"] = 300
+    document = canonical_protocol_document(raw_document)
+
+    decision = _engine().dispatch_preflight(
+        document=document,
+        run=_run(),
+        stage=document.stage("planning"),
+        stage_executions=[],
+        now="2026-04-16T00:00:00+00:00",
+        lease_owner="stage-current",
+        lease_ttl_seconds=900,
+    )
+
+    assert decision.ok is True
+    assert decision.timeout_at == "2026-04-16T00:05:00+00:00"
 
 
 def test_protocol_run_engine_uses_stage_selector_for_dispatch() -> None:

@@ -212,7 +212,7 @@ def create_management_request(
         f"""
         INSERT INTO {dialect.qualify('management_requests')} (
             request_id, target_agent_id, operation, payload_json,
-            status, delivery_id, result_json, error_code, error_detail, created_at, completed_at
+            status, delivery_id, result_json, error_code, error_detail, timeout_seconds, created_at, completed_at
         )
         VALUES (
             {dialect.placeholder(1)},
@@ -225,6 +225,7 @@ def create_management_request(
             '',
             '',
             {dialect.placeholder(6)},
+            {dialect.placeholder(7)},
             ''
         )
         ON CONFLICT (request_id) DO UPDATE SET
@@ -236,6 +237,7 @@ def create_management_request(
             result_json = NULL,
             error_code = '',
             error_detail = '',
+            timeout_seconds = EXCLUDED.timeout_seconds,
             created_at = EXCLUDED.created_at,
             completed_at = ''
         """,
@@ -245,6 +247,7 @@ def create_management_request(
             validated_request.operation,
             json_param(validated_request.model_dump(mode="json")),
             delivery_id,
+            int(validated_request.timeout_seconds or 0),
             now,
         ),
     )

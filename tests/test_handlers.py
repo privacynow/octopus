@@ -124,6 +124,89 @@ async def test_happy_path():
         assert "Hello world" in " ".join(m.get("text", "") for m in bot.sent_messages)
 
 
+async def test_plain_message_dispatch_exception_notifies_after_resuming():
+    class RaisingProvider(FakeProvider):
+        async def run(self, provider_state, prompt, image_paths, progress, context=None, cancel=None):
+            self.run_calls.append({
+                "provider_state": dict(provider_state),
+                "prompt": prompt,
+                "image_paths": image_paths,
+                "context": context,
+            })
+            raise RuntimeError("provider dispatch exploded")
+
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, runtime_mode="shared")
+        prov = RaisingProvider("claude")
+        setup_globals(cfg, prov)
+        session = default_session(
+            "claude",
+            ProviderStateRecord({"session_id": "resume-session", "started": True}),
+            "off",
+        )
+        save_session(data_dir, _conv(12345), session)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        await send_text(chat, user, "continue")
+
+        runtime = current_runtime()
+        worker = runtime.submitter
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(worker._run_worker_loop(stop_event))
+        try:
+            for _ in range(60):
+                texts = [str(item.get("text") or item.get("edit_text") or "") for item in current_bot_instance().sent_messages]
+                if any("Something went wrong" in text for text in texts):
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("plain-message dispatch failure did not notify the user")
+        finally:
+            stop_event.set()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        texts = [str(item.get("text") or item.get("edit_text") or "") for item in current_bot_instance().sent_messages]
+        assert any("Resuming" in text for text in texts)
+        assert any("Something went wrong" in text for text in texts)
+        items = work_queue.get_work_items_for_chat(data_dir, _conv(12345))
+        assert items[-1].state == "failed"
+        assert items[-1].error == "dispatch_exception"
+
+
+async def test_plain_message_provider_switch_starts_fresh_session():
+    with fresh_data_dir() as data_dir:
+        cfg = make_config(data_dir, runtime_mode="shared", provider_name="claude")
+        prov = FakeProvider("claude")
+        setup_globals(cfg, prov)
+        stale_session = default_session(
+            "codex",
+            ProviderStateRecord({"thread_id": "old-codex-thread"}),
+            "off",
+        )
+        save_session(data_dir, _conv(12345), stale_session)
+
+        chat = FakeChat(12345)
+        user = FakeUser(42)
+        await send_text(chat, user, "so")
+        assert await drain_one_worker_item(data_dir)
+
+        texts = [str(item.get("text") or item.get("edit_text") or "") for item in current_bot_instance().sent_messages]
+        assert any("Working" in text for text in texts)
+        assert not any("Resuming" in text for text in texts)
+        assert len(prov.run_calls) == 1
+        provider_state = prov.run_calls[0]["provider_state"]
+        assert "session_id" in provider_state
+        assert provider_state.get("started") is False
+        assert "thread_id" not in provider_state
+
+        saved = load_session_disk(data_dir, _conv(12345), prov)
+        assert saved["provider"] == "claude"
+        assert saved["provider_state"]["started"] is False
+        assert "session_id" in saved["provider_state"]
+        assert "thread_id" not in saved["provider_state"]
+
+
 async def test_worker_dispatch_schedules_completion_webhook_for_terminal_outcome(monkeypatch):
     with fresh_env(
         config_overrides={"completion_webhook_url": "https://hooks.example.com/completed"}

@@ -134,6 +134,7 @@ def test_bot_dockerfile_installs_common_stage_toolchain() -> None:
     expected_packages = {
         "bind9-dnsutils",
         "build-essential",
+        "chromium",
         "cmake",
         "curl",
         "fonts-liberation",
@@ -188,6 +189,7 @@ def test_bot_dockerfile_installs_common_stage_toolchain() -> None:
         assert package in dockerfile
 
     assert dockerfile.count("apt-get install") == 1
+    assert "pip install --no-cache-dir playwright==1.56.0" in dockerfile
     assert "bot ALL=(root) NOPASSWD:ALL" in dockerfile
 
 

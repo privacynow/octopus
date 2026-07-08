@@ -25,6 +25,7 @@ tests/.postgres_run_id*
 test-results/
 .tmp/
 docs/registry-ui-screenshots/node_modules/
+tests/e2e/playwright/node_modules/
 
 # OS/editor junk
 .DS_Store

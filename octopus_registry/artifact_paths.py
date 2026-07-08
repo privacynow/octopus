@@ -82,6 +82,10 @@ def _mounted_workspace_roots() -> tuple[str, ...]:
     )
 
 
+def clear_mounted_workspace_roots_cache() -> None:
+    _mounted_workspace_roots.cache_clear()
+
+
 def _artifact_body_from_full_text(full_text: str) -> str:
     body_lines: list[str] = []
     for line in str(full_text or "").splitlines():

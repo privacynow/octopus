@@ -76,13 +76,26 @@ does not want to manually design every stage.
 From `Build -> Protocols`, choose `Auto protocol`, describe the desired outcome,
 attach any source files that should inform the work, and add optional
 constraints. Registry sends the design job to a connected provider-capable bot,
-which returns structured planning records. The SDK then compiles those records
-into a normal editable protocol draft with inferred roles, stages, artifacts,
-adversarial review loops, run inputs, resource references, and final evidence.
+and immediately saves a durable `planning` session backed by a hidden
+`auto_design` routed task. `Build -> Designs` is the first-class queue for those
+sessions: it remains visible after a dialog closes, supports deep links by
+`session_id`, and shows the planner agent, progress, events, warnings, draft
+summary, and available Apply/Publish/Run actions. The dialog and queue subscribe
+to the `protocol-auto-session:{id}` update topic and poll as a fallback while
+the bot performs heavyweight semantic planning. When the routed task posts the
+typed planner result, Registry compiles it into a normal editable protocol draft
+with inferred roles, stages, artifacts, adversarial review loops, run inputs,
+resource references, and final evidence.
 Review the generated structure, ask for changes if needed, then apply it as a
 normal draft. When validation and assignments are already ready, the Auto
 Protocol panel can also publish or publish and run directly; otherwise use the
 normal editor to resolve the warnings first.
+
+Planner assignment is queue-based. `Auto` is the default and chooses among
+connected agents that advertise `design_auto_protocol`, skipping agents already
+busy with another Auto Protocol design when another capable agent is available.
+Operators may explicitly target a planner agent from the dialog; invalid,
+disconnected, or unsupported targets are rejected server-side.
 
 Auto Protocol validates its generated draft before it shows it as ready. The
 generator repairs structural issues such as missing slugs, missing artifact
@@ -98,9 +111,10 @@ revision that affects only future runs after publish.
 
 Auto Protocol can also improve from an existing run. Open `Work -> Runs`, select
 the run, and choose `Improve this run`. Octopus includes the run objective,
-status, primary artifact, and produced artifacts as context, then creates a
-normal Auto Protocol revision of the underlying protocol. This is the path to
-bring an older run up to the current bar without manually patching the artifact.
+status, primary artifact, produced artifacts, blocker reasons, runtime events,
+review decisions, and structured run lessons as context, then creates a normal
+Auto Protocol revision of the underlying protocol. This is the path to bring an
+older run up to the current bar without manually patching the artifact.
 
 The generated result is not a separate format. It is the same canonical
 protocol document used by manual authoring, export/import, publish, and run
@@ -119,6 +133,22 @@ historical, art, sound, implementation, playtest, UX, and release reviewers. An
 analytics workflow may need data modeling, visualization, validation, and
 readiness evidence. A simple workflow may need fewer stages.
 
+For serious products, Auto Protocol now separates the planner's outline from
+the authoritative acceptance contract. The planner stores only a v2 skeleton in
+`metadata.auto_protocol.acceptance_contract`: product class, whether a full
+contract is required, the `auto_protocol_contract` artifact key, and the
+minimum evidence kinds. Early run stages then produce and review the real
+run-specific contract as artifacts: `product_domain_contract` first, then the
+merged `auto_protocol_contract` for product, domain, system, and verification.
+The merged contract must reference the exact product/domain snapshot it used by
+artifact key, content hash, and producing stage execution id. The gate reads
+those reviewed snapshots, not the planner's prose, before final acceptance and
+blocks stale, missing, wrong-stage, malformed, or unreviewed contracts. This is
+required for runnable apps, APIs, dashboards, workflow engines,
+persistent-state systems, external-provider integrations, finance/trading,
+payments, secrets, live actions, recommendations, backtesting, or other
+high-risk product classes.
+
 Generated workflows are budgeted. The normal compiler keeps the primary outcome
 stage immediately before final acceptance and rejects plans above the hard stage
 cap instead of silently creating a token-heavy workflow. The final stage is an
@@ -127,6 +157,19 @@ artifact and can return defective work to the outcome stage. Runtime contract
 defects such as a missing, invalid, or non-run-ready manifest are converted into
 an in-product revise transition when the protocol has a revise path; missing
 operator exercise evidence remains blocked until the runtime is exercised.
+For serious contract-backed products, generated stages also receive explicit
+execution budgets in the stage runtime contract. Generated documents persist
+`timeout_seconds: 0` unless an operator explicitly authored a value; runtime
+dispatch derives serious work/review/acceptance budgets from Auto Protocol
+metadata so the DB stage row, timeout sweep, and bot runtime contract agree.
+Provider runtimes honor that budget per stage, so heavyweight contract,
+implementation, and evidence stages do not silently fall back to a short global
+bot timeout.
+
+Applying an Auto Protocol draft uses the operator authoring surface. Callers
+without publisher or admin authoring rights receive
+`PROTOCOL_AUTO_APPLY_ROLE_REQUIRED`; the UI treats that as a permission problem,
+not a retryable planner failure.
 
 Every Auto Protocol declares primary artifact metadata. Runs UI and Telegram
 promote that artifact first, then show supporting plans, reviews, and release
@@ -149,6 +192,9 @@ Minimum human verification:
 
 1. Generate a protocol from Registry and inspect the summary, packages, stages,
    warnings, primary artifact, attached-resource count, and available actions.
+   For large requirements, confirm the modal remains responsive while the
+   session status is `planning` and then updates to ready, blocked, or failed
+   without a browser request timeout.
 2. Generate a protocol from Telegram with `/protocol auto <requirement>` and
    confirm the returned card is readable, explains the proposed workflow, shows
    the primary outcome, and offers obvious next actions.
@@ -294,6 +340,7 @@ Process-backed packages should declare:
 - an outcome-readiness matrix in release evidence, and preferably
   `metadata.outcome_readiness_checks` in the manifest for representative
   journeys or scenarios
+- `test_hooks` when a protocol carries a structured acceptance contract
 
 The `start_command` must launch an already prepared artifact. Registry rejects
 process-backed runtime starts that try to install dependencies, build, package,
@@ -328,6 +375,63 @@ artifact evidence, and runtime events. Manifest policy is generic: process
 runtimes must start prepared artifacts and may be rejected for dependency
 install, build, package, test, or developer-mode commands; Maven is only one
 example of that broader policy.
+
+When a protocol version includes
+`metadata.auto_protocol.acceptance_contract`, final acceptance uses structured
+evidence instead of prose-only claims. For v2 serious products, the metadata is
+only a skeleton. The gate first resolves the reviewed `product_domain_contract`
+and `auto_protocol_contract` snapshots, checks that the merged contract points
+at the current product/domain snapshot, and blocks unresolved
+`operator_decisions_required` before applying evidence. The contract names
+required journeys in terms of stable hook ids. The artifact must expose those
+hooks in
+`octopus-runtime.json.test_hooks`, typically as `data-testid` locators. Missing
+or unmapped hooks are artifact contract failures. The bot-side journey runner
+executes only Registry-routed artifact URLs, sends its scoped runtime token only
+to the Registry origin, blocks arbitrary external navigation unless the
+contract allows it, and posts structured pass/fail results back to Registry.
+Journey results count only when they reference a Registry-issued
+`journey_run_id` for the current runtime instance and retained artifact
+snapshot. Producer and planning stages do not receive journey-result
+capabilities; structured acceptance evidence must come from the acceptance
+runner or an operator-requested re-run. Protocols without an acceptance contract
+keep the legacy runtime/prose evidence gate.
+
+The evidence manifest artifact keys are `producer_evidence_manifest` and
+`reviewer_evidence_manifest`. They are normal protocol artifacts and are read
+from the latest retained snapshot when the acceptance gate evaluates a
+contract-bearing run. For v2 contracts, each evidence item also carries a trust
+tier, source stage, observed time, current artifact content hash, runtime
+instance when applicable, observed result, and corroboration references. Tier 1
+evidence is limited to machine-corroborated Registry state: runtime
+start/health, journey results tied to a Registry-issued `journey_run_id`, API
+probes matched against server-generated fetch events, and retained snapshot
+hashes. Unsupported Tier 1 kinds are blockers instead of accepted claims. Tier 2
+is independent reviewer attestation such as unit/integration tests, domain
+invariants, DB or persistence checks, provider mocks, state-machine checks,
+security checks, negative cases, and regression seeds; it must be produced by
+the expected reviewer or verification stage and match the current artifact
+hash. Tier 3 is advisory evidence such as domain sources, live-provider notes,
+and residual-risk explanations. Advisory evidence can be required for
+visibility, but it cannot satisfy machine-proof requirements.
+
+When the gate blocks a v2 run, the transition metadata keeps the legacy
+`missing_runtime_evidence` list and also records structured `evidence_status`
+rows. The UI renders those rows as an evidence matrix grouped by
+product/domain, backend/API, state, provider/data, security, UI/workflow, docs,
+and operator decisions so operators can see which proof is missing, stale,
+wrong-stage, wrong-hash, uncorroborated, or advisory-only.
+
+The v2 gate covers more than browser journeys. The reviewed
+`auto_protocol_contract` must describe product workflows, unsafe actions,
+domain assumptions and source boundaries, API surface, persistence/state
+invariants, provider ports and callouts, secrets/auth boundaries, failure
+behavior, positive and negative tests, backend/API probes, DB/state checks,
+provider mock or live-status checks, browser journeys, and documentation checks
+when the product needs them. Serious contracts with unsafe actions, persistent
+state, provider callouts, or security boundaries must require adversarial
+negative-case evidence. A reviewer manifest that only says "looks good" or
+contains uncorroborated JSON is not enough.
 
 ## Starting A Run
 
@@ -388,10 +492,45 @@ Supported run actions include:
 - `retry`
 - `accept`
 - `send-back`
+- `interrupt`
 - `cancel`
 
 Actions are permission-gated, version checked, and recorded in run history.
 Corrective or destructive actions should require a reason where applicable.
+
+`interrupt` stops the active stage from the operator side, marks the stage
+blocked with `operator_interrupted`, and asks the assigned bot to cancel the
+running provider subprocess when it can. The server rejects interrupt attempts
+against terminal runs or completed stages with a conflict response; hiding the
+button in the UI is not the correctness rule. `cancel` ends the whole run and
+also requests provider cancellation when work is still running. Late provider
+results after an interrupted, timed-out, blocked, or canceled stage are kept as
+task/audit metadata only; they do not advance the run or overwrite artifact
+records or retained snapshots.
+
+When a stage issue says `Expired write lease`, it means the Registry has not
+heard a lease-renewing task update before the lease expiry. It is not proof the
+provider process died. Check task age, timeout, stage status, and latest task
+update before retrying or interrupting.
+
+## Fork And Resume
+
+Runs can be forked from a selected stage when an operator wants to preserve
+earlier work but continue as a separate run. A fork never mutates the parent
+run. Octopus materializes retained snapshots into a new run-scoped workspace
+prefix and records parent/child lineage on the run detail.
+
+Fork modes:
+
+- `Rerun selected`: copy snapshots before the selected stage, seed prior stage
+  history, then dispatch the selected stage again.
+- `Continue after`: copy snapshots through the selected stage, seed prior
+  stage results, decisions, summaries, and previous feedback, then dispatch the
+  next stage.
+
+If required snapshots are missing, the fork is blocked with a list of missing
+artifacts. Retain packages before cleanup when a run may need to be forked or
+resumed later.
 
 ## Export And Import
 

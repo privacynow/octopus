@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     bind9-dnsutils \
     build-essential \
     ca-certificates \
+    chromium \
     cmake \
     curl \
     fonts-liberation \
@@ -64,6 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir playwright==1.56.0
 COPY app ./app
 COPY octopus_sdk ./octopus_sdk
 COPY scripts ./scripts

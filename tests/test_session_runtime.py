@@ -65,6 +65,36 @@ def test_local_session_runtime_load_normalizes_single_project(tmp_path: Path) ->
         runtime_backend.reset_for_test()
 
 
+def test_local_session_runtime_load_resets_provider_mismatch(tmp_path: Path) -> None:
+    ensure_data_dirs(tmp_path)
+    cfg = make_config(data_dir=tmp_path, provider_name="claude")
+    provider = FakeProvider("claude")
+    runtime = LocalSessionRuntime(cfg)
+    conversation_key = "tg:provider-switch"
+    runtime_backend.init(cfg)
+    try:
+        save_runtime_session(
+            tmp_path,
+            conversation_key,
+            _session(provider="codex", approval_mode="off", thread_id="thread-123"),
+        )
+
+        loaded = runtime.load(
+            conversation_key,
+            provider_name="claude",
+            provider_state_factory=provider.new_provider_state,
+            approval_mode="off",
+        )
+
+        assert loaded.provider == "claude"
+        assert loaded.provider_state.get("thread_id") is None
+        assert loaded.provider_state.get("session_id")
+        assert loaded.provider_state.get("started") is False
+        assert loaded.pending_approval is None
+    finally:
+        runtime_backend.reset_for_test()
+
+
 def test_local_session_runtime_recover_after_crash_normalizes_single_project(tmp_path: Path) -> None:
     ensure_data_dirs(tmp_path)
     workspace = tmp_path / "workspace"

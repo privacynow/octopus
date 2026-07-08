@@ -229,6 +229,36 @@ the same controls as any other protocol. For revision from chat or deeper
 authoring notes, stay with [PROTOCOLS.md](PROTOCOLS.md) and
 [TELEGRAM.md](TELEGRAM.md).
 
+Auto Protocol design can be intentionally heavyweight. Large run-improvement
+requests may take several minutes because the planner is reading prior run
+context, lessons, artifact expectations, assignments, review loops, and runtime
+evidence needs. The Registry dialog and `Build -> Designs` queue show the
+planner agent, planner job, elapsed/quiet progress, timeout expectations, and
+large-input hints while the session is `planning`. `Apply draft`, `Publish`, and
+`Publish & Run` are not valid actions until planning finishes; if the browser
+reloads or the dialog is closed, open `Build -> Designs` to reattach to the same
+session instead of starting another planner job. A failed planner session
+remains visible with an actionable error instead of disappearing behind a
+browser timeout.
+
+When the request is a serious product, Auto Protocol shows the inferred product
+class and whether a full product/system contract is required. Full contract mode
+adds early contract-production and contract-review stages before implementation.
+Those stages produce and review a run-specific `product_domain_contract` and
+then a merged `auto_protocol_contract`, which becomes the acceptance bar for
+product behavior, domain caveats, backend/API behavior, persistence, provider
+callouts, security boundaries, and verification evidence. The merged contract
+must point back to the exact product/domain snapshot it used so stale or
+wrong-stage contracts cannot be accepted.
+Serious-product stages use derived multi-hour execution budgets at dispatch time
+so slow domain, backend, and evidence work does not inherit a short global bot
+timeout. Generated drafts persist `timeout_seconds: 0` unless an operator
+explicitly authored a timeout; the run detail and routed task still receive the
+derived serious-product budget.
+If a stage still times out, the run detail shows the timed-out stage and routed
+task so you can retry, send back, interrupt, or inspect provider health.
+Use lightweight mode only for non-runtime, non-high-risk work.
+
 Telegram can also start an Auto Protocol session when you want a chat-first
 flow. The message should summarize the proposed workflow, show the primary
 outcome, and provide obvious actions such as Apply Draft, Publish, Publish &
@@ -269,10 +299,18 @@ A long-running stage is not automatically stuck. It should show enough progress
 or state for a user to understand whether work is still moving.
 
 When a completed run needs to be improved, select it and use `Improve this run`.
-Octopus sends the run objective, status, primary artifact, and produced artifact
-summary through Auto Protocol and creates a normal revision of the original
-protocol. The previous artifact remains audit evidence; the improvement creates
-a new draft, publish, and run path.
+Octopus sends the run objective, status, primary artifact, produced artifact
+summary, blockers, runtime events, review notes, and structured lessons through
+Auto Protocol and creates a normal revision of the original protocol. The
+previous artifact remains audit evidence; the improvement creates a new draft,
+publish, and run path.
+
+When a run is broken or you want to explore a different path from the same
+work, open the stage menu and choose `Rerun from here` or `Continue after`.
+Octopus creates a child run, copies retained snapshots into a new workspace
+prefix, and links the parent and child in the run detail. Forking requires
+retained snapshots for the selected boundary; if they are missing, the UI shows
+which artifacts need to be retained or reproduced.
 
 ## Open Artifacts
 
@@ -308,6 +346,34 @@ The reviewer must exercise representative user journeys through the Registry,
 record visible results, complete an outcome-readiness matrix, and confirm that
 the artifact's customer-facing UI/API does not use Octopus as the product brand
 unless that branding was requested.
+
+If acceptance is blocked, the dialog stays open with the missing evidence. For
+contract-bearing runs, Octopus checks structured journey results and reviewer
+evidence manifests instead of accepting prose-only claims. A missing reviewed
+product/domain contract, missing merged contract, wrong-stage snapshot, stale
+artifact hash, unresolved operator decision, missing API probe, failed DB
+invariant, missing provider mock, absent domain-source note, missing hook,
+failed journey, unhealthy runtime, or absent reviewer manifest remains visible
+until fixed, re-run, accepted by the correct path, or sent back. Serious runs
+also show a grouped evidence matrix so you can distinguish machine proof,
+reviewer-produced evidence, and advisory source/risk notes.
+Use `Re-run journeys` from the runtime panel to queue another browser journey
+without re-running the whole stage. The request returns immediately, and the run
+updates when the bot posts the correlated result.
+
+The evidence matrix groups missing items by product/domain, backend/API,
+provider/data, state/security, and browser/runtime. Tier 1 evidence is
+machine-corroborated by Registry events; Tier 2 is independent reviewer
+attestation bound to the current artifact hash; Tier 3 is advisory domain or
+residual-risk evidence. Advisory notes help you understand risk, but they do
+not replace required machine evidence.
+
+Use `Interrupt` when a running stage is clearly on the wrong path or the
+provider is stuck and you want to stop it without losing the run history.
+Interrupt blocks the current stage and asks the bot to stop active provider
+work where possible. The server rejects interrupt on completed or otherwise
+terminal runs, even if a stale browser still shows the button. Use `Cancel` only
+when the whole run should end.
 
 ## Archive, Delete, And Cleanup
 

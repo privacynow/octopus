@@ -8,6 +8,7 @@ import copy
 import json
 import re
 from collections.abc import Awaitable, Callable, Mapping
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -27,6 +28,7 @@ from octopus_sdk.protocols import (
     ProtocolAutoDesignModelRequestRecord,
     ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
+    ProtocolAutoDesignWarningRecord,
     ProtocolDraftCreateRecord,
     ProtocolPackageImportApplyResultRecord,
     ProtocolPackageImportPlanRecord,
@@ -35,9 +37,14 @@ from octopus_sdk.protocols import (
     ProtocolPackageSkillPlanRecord,
     ProtocolPackageStageMappingPlanRecord,
     ProtocolRunCreateRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRuntimeCapabilityExchangeRecord,
+    ProtocolRuntimeJourneyResultRecord,
+    ProtocolRuntimeJourneySpecRecord,
     ProtocolTemplateCreateRecord,
     TargetSelector,
     canonical_protocol_document,
+    generate_auto_protocol_session,
     protocol_run_create_from_auto_session,
     revise_auto_protocol_session,
     protocol_definition_content_hash,
@@ -55,8 +62,8 @@ from octopus_sdk.registry.management import (
     ArtifactRuntimeHealthResult,
     ArtifactRuntimeLogsRequest,
     ArtifactRuntimeLogsResult,
-    DesignAutoProtocolRequest,
-    DesignAutoProtocolResult,
+    ManagementRequest,
+    RunArtifactJourneyRequest,
     StartArtifactRuntimeRequest,
     StartArtifactRuntimeResult,
     StopArtifactRuntimeRequest,
@@ -67,7 +74,7 @@ from octopus_sdk.registry.management import (
     WorkspaceUsageRequest,
     WorkspaceUsageResult,
 )
-from octopus_sdk.registry.models import RegistryJsonRecord
+from octopus_sdk.registry.models import RegistryJsonRecord, RoutedTaskRequest, utcnow_iso
 from octopus_sdk.skill_packages import (
     skill_document_from_text,
     skill_document_to_text,
@@ -427,6 +434,13 @@ def build_protocol_router(
             return _protocol_http_error(409, error_code="IDEMPOTENCY_REPLAY", message=message)
         if status == "concurrent_modification":
             return _protocol_http_error(409, error_code="CONCURRENT_MODIFICATION", message=message)
+        if status == "missing_snapshots":
+            return _protocol_http_error(
+                409,
+                error_code="PROTOCOL_FORK_SNAPSHOTS_MISSING",
+                message=message,
+                details={"missing_snapshots": list(getattr(result, "missing_snapshots", []) or [])},
+            )
         if status == "duplicate_slug":
             return _protocol_http_error(409, error_code="PROTOCOL_DUPLICATE_SLUG", message=message)
         if status == "invalid_action":
@@ -441,6 +455,77 @@ def build_protocol_router(
         if auth.is_agent:
             roles.update({"agent", "author", "publisher"})
         return access.model_copy(update={"roles": sorted(roles)})
+
+    def _auto_protocol_can_apply_operator_surface(access: ProtocolAccessContextRecord) -> bool:
+        return access.has_role("publisher") or access.has_role("admin")
+
+    @router.post("/v1/agents/runtime-capabilities/exchange")
+    def resource_exchange_runtime_capability(
+        payload: ProtocolRuntimeCapabilityExchangeRecord = Body(default_factory=ProtocolRuntimeCapabilityExchangeRecord),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        if not auth.is_agent or not auth.agent_id:
+            raise _protocol_http_error(
+                403,
+                error_code="RUNTIME_CAPABILITY_AGENT_REQUIRED",
+                message="Runtime capability exchange requires an enrolled agent bearer token.",
+            )
+        result = store.exchange_runtime_capability_token(
+            capability_ref=payload.capability_ref,
+            target_agent_id=auth.agent_id,
+        )
+        if not result.ok:
+            raise _protocol_http_error(
+                403 if result.status in {"forbidden", "revoked", "expired", "inactive", "exhausted"} else 404,
+                error_code=f"RUNTIME_CAPABILITY_{str(result.status or 'invalid').upper()}",
+                message=result.message or "Runtime capability exchange failed.",
+            )
+        return _json_payload(result)
+
+    def _runtime_access(action: str):
+        def _dependency(
+            request: Request,
+            run_id: str,
+            artifact_key: str,
+            authorization: str | None = Header(default=None),
+            x_csrf_token: str | None = Header(default=None),
+            store: AbstractRegistryStore = Depends(get_store),
+        ) -> ProtocolAccessContextRecord:
+            bearer = ""
+            if authorization and authorization.startswith("Bearer "):
+                bearer = authorization.removeprefix("Bearer ").strip()
+            if bearer:
+                token = store.validate_runtime_capability_token(
+                    bearer_token=bearer,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact_key,
+                    action=action,
+                )
+                if token is None:
+                    raise _protocol_http_error(
+                        403,
+                        error_code="RUNTIME_CAPABILITY_FORBIDDEN",
+                        message="Runtime capability token is invalid for this run, artifact, or action.",
+                    )
+                return ProtocolAccessContextRecord(
+                    actor_ref=(
+                        "runtime-capability:"
+                        f"{token.capability_token_id}:"
+                        f"{token.protocol_stage_execution_id}:"
+                        f"{token.participant_key}"
+                    ),
+                    org_id="local",
+                    roles=["agent", "runtime_capability"],
+                )
+            operator_auth = require_operator_session(
+                request,
+                authorization=None,
+                x_csrf_token=x_csrf_token,
+            )
+            return protocol_access(operator_auth)
+
+        return _dependency
 
     def _package_format(value: object) -> str:
         token = str(value or "").strip().lower()
@@ -507,6 +592,84 @@ def build_protocol_router(
             message=f"Connect an agent that supports {operation}.",
         )
 
+    def _auto_design_active_tasks(store: AbstractRegistryStore, agent_id: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for status in ("queued", "leased", "running"):
+            for task in store.list_tasks(
+                for_agent_id=agent_id,
+                status=status,
+                limit=100,
+                include_generated=True,
+            ):
+                if str(task.source_kind or "") == "auto_design":
+                    rows.append(task.model_dump(mode="json"))
+        return rows
+
+    def _latest_auto_design_task_updated_at(store: AbstractRegistryStore, agent_id: str) -> str:
+        latest = ""
+        for status in ("completed", "failed", "cancelled", "timed_out"):
+            rows = [
+                task
+                for task in store.list_tasks(
+                    for_agent_id=agent_id,
+                    status=status,
+                    limit=10,
+                    include_generated=True,
+                )
+                if str(task.source_kind or "") == "auto_design"
+            ]
+            if rows:
+                latest = max(latest, str(rows[0].updated_at or ""))
+        return latest
+
+    def _auto_design_agent_id(
+        store: AbstractRegistryStore,
+        *,
+        requested_agent_id: str = "",
+    ) -> tuple[str, str, dict[str, object]]:
+        agents = _connected_agents(store)
+        eligible: list[dict[str, object]] = []
+        for agent in agents:
+            operations = {str(item or "").strip() for item in agent.get("supported_admin_operations", []) or []}
+            if "design_auto_protocol" not in operations:
+                continue
+            agent_id = str(agent.get("agent_id") or "").strip()
+            active = _auto_design_active_tasks(store, agent_id)
+            eligible.append({
+                **agent,
+                "active_auto_design_count": len(active),
+                "latest_auto_design_updated_at": _latest_auto_design_task_updated_at(store, agent_id),
+            })
+        if requested_agent_id:
+            candidate = next((item for item in eligible if str(item.get("agent_id") or "") == requested_agent_id), None)
+            if candidate is None:
+                connected = next((item for item in agents if str(item.get("agent_id") or "") == requested_agent_id), None)
+                if connected is None:
+                    raise _protocol_http_error(
+                        404,
+                        error_code="AGENT_NOT_CONNECTED",
+                        message="Requested planner agent is not connected.",
+                    )
+                raise _protocol_http_error(
+                    409,
+                    error_code="AGENT_OPERATION_UNSUPPORTED",
+                    message="Requested planner agent does not support Auto Protocol design.",
+                )
+            return requested_agent_id, "specific_agent", candidate
+        if not eligible:
+            raise _protocol_http_error(
+                409,
+                error_code="AGENT_OPERATION_UNAVAILABLE",
+                message="Connect an agent that supports Auto Protocol design.",
+            )
+        eligible.sort(key=lambda item: (
+            int(item.get("active_auto_design_count") or 0),
+            str(item.get("latest_auto_design_updated_at") or ""),
+            str(item.get("display_name") or "").lower(),
+        ))
+        selected = eligible[0]
+        return str(selected.get("agent_id") or ""), "auto_select", selected
+
     def _routing_skill_json(skill) -> dict[str, Any]:
         row = skill.model_dump(mode="json") if hasattr(skill, "model_dump") else dict(skill)
         return {
@@ -517,6 +680,167 @@ def build_protocol_router(
                 if str(item or "").strip()
             ],
             "enabled": row.get("enabled"),
+        }
+
+    def _auto_protocol_run_lessons(store: AbstractRegistryStore, run_id: str, access: ProtocolAccessContextRecord) -> list[dict[str, object]]:
+        run_id = str(run_id or "").strip()
+        if not run_id:
+            return []
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_RUN_NOT_VISIBLE", message="Source protocol run is not visible for lesson harvesting.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Source protocol run was not found for lesson harvesting.") from exc
+        except Exception as exc:
+            raise _protocol_http_error(500, error_code="PROTOCOL_RUN_LESSONS_FAILED", message=f"Failed to harvest source run lessons: {exc}") from exc
+        lessons: list[dict[str, object]] = []
+
+        def add(
+            category: str,
+            summary: str,
+            source_ref: str,
+            *,
+            lesson_type: str = "",
+            applies_when: str = "",
+            contract_section: str = "",
+            required_evidence: list[str] | None = None,
+            source_failure: str = "",
+        ) -> None:
+            text = re.sub(r"\s+", " ", str(summary or "")).strip()
+            if not text:
+                return
+            key = (category, text.lower(), source_ref)
+            if any((item["category"], item["summary"].lower(), item["source_ref"]) == key for item in lessons):
+                return
+            evidence = [str(item or "").strip() for item in (required_evidence or []) if str(item or "").strip()]
+            lessons.append({
+                "category": category,
+                "lesson_type": lesson_type or category,
+                "summary": text[:500],
+                "applies_when": applies_when or "a future run has a similar requirement, artifact, stage, or failure mode",
+                "contract_section": contract_section or "verification_contract",
+                "requirement_id": re.sub(r"[^a-z0-9_]+", "_", f"lesson_{category}_{len(lessons) + 1}".lower()).strip("_"),
+                "required_evidence": evidence,
+                "source_ref": source_ref,
+                "source_run_id": run.protocol_run_id,
+                "source_failure": (source_failure or text)[:500],
+            })
+
+        run = detail.run
+        if run.blocked_code:
+            add(
+                "blocked",
+                f"Prior run blocked with {run.blocked_code}: {run.blocked_detail}",
+                f"protocol-run:{run.protocol_run_id}",
+                lesson_type="negative_case",
+                applies_when="the product can block on the same acceptance or runtime evidence condition",
+                required_evidence=["negative_case", "regression_seed"],
+                source_failure=str(run.blocked_code or ""),
+            )
+        for stage in detail.stage_executions:
+            if stage.failure_code:
+                add(
+                    "stage_failure",
+                    f"Stage {stage.stage_key} failed or blocked with {stage.failure_code}: {stage.failure_detail}",
+                    f"stage:{stage.protocol_stage_execution_id}",
+                    lesson_type="regression_seed",
+                    applies_when=f"a future protocol contains stage {stage.stage_key} or the same stage failure mode",
+                    required_evidence=["regression_seed"],
+                    source_failure=str(stage.failure_code or ""),
+                )
+            elif stage.decision_summary:
+                add(
+                    "decision",
+                    f"Stage {stage.stage_key} recorded: {stage.decision_summary}",
+                    f"stage:{stage.protocol_stage_execution_id}",
+                    lesson_type="documentation_claim",
+                    applies_when="a future contract needs to preserve reviewer decisions or operator-visible rationale",
+                    required_evidence=["documentation_claim"],
+                )
+        for event in detail.runtime_events:
+            kind = str(event.event_kind or "")
+            if kind in {"journey_failed", "client_error", "health_checked", "runtime_error"}:
+                add(
+                    "runtime",
+                    f"Runtime event {kind}: {event.summary}",
+                    f"runtime-event:{event.runtime_event_id}",
+                    lesson_type="runtime_evidence",
+                    applies_when="a future runnable artifact has comparable runtime, health, browser, or client behavior",
+                    required_evidence=["browser_journey" if kind == "journey_failed" else "runtime_health"],
+                    source_failure=kind,
+                )
+        for transition in detail.transitions:
+            if transition.error_code or transition.transition_kind in {"late_result", "runtime_evidence_auto_accept", "task_cancel_requested"}:
+                add(
+                    "transition",
+                    f"{transition.transition_kind}: {transition.reason or transition.error_code}",
+                    f"transition:{transition.protocol_transition_id}",
+                    lesson_type="state_machine",
+                    applies_when="a future protocol has comparable state transitions, retries, late results, or cancellation behavior",
+                    required_evidence=["state_machine", "negative_case"],
+                    source_failure=str(transition.error_code or transition.transition_kind or ""),
+                )
+        for artifact in detail.artifacts:
+            if artifact.exists is False or str(artifact.verification_state or "") in {"missing", "declared"}:
+                add(
+                    "artifact",
+                    f"Artifact {artifact.artifact_key} was not proved available at {artifact.workspace_path or artifact.location}.",
+                    f"artifact:{artifact.artifact_key}",
+                    lesson_type="artifact_snapshot",
+                    applies_when="a future protocol relies on the same kind of artifact output or package boundary",
+                    required_evidence=["artifact_snapshot"],
+                    source_failure="artifact_missing",
+                )
+        return lessons[:20]
+
+    def _auto_protocol_resource_summaries(
+        store: AbstractRegistryStore,
+        resource_refs: list[str],
+    ) -> list[dict[str, object]]:
+        summaries: list[dict[str, object]] = []
+        for resource_id in resource_refs[:20]:
+            token = str(resource_id or "").strip()
+            if not token:
+                continue
+            resource = store.get_resource(token)
+            metadata = resource.metadata_json.as_dict()
+            summary: dict[str, object] = {
+                "resource_id": resource.resource_id,
+                "name": resource.original_name,
+                "mime_type": resource.mime_type,
+                "size_bytes": int(resource.size_bytes or 0),
+                "content_hash": resource.content_hash,
+                "source_surface": resource.source_surface,
+            }
+            for key in ("summary", "description", "caption", "text_preview"):
+                value = str(metadata.get(key, "") or "").strip()
+                if value:
+                    summary[key] = value[:2000]
+            summaries.append(summary)
+        return summaries
+
+    def _auto_protocol_prompt_diagnostics(
+        request_payload: ProtocolAutoDesignRequestRecord,
+        *,
+        selected_agent: Mapping[str, object],
+    ) -> dict[str, object]:
+        source_document = request_payload.source_document.as_dict()
+        source_size = len(json.dumps(source_document, sort_keys=True, default=str)) if source_document else 0
+        requirement_size = len(request_payload.requirement_text or "")
+        constraints_size = len(request_payload.constraints_text or "")
+        lesson_count = len(request_payload.run_lessons or [])
+        resource_count = len(request_payload.resource_refs or [])
+        return {
+            "requirement_chars": requirement_size,
+            "constraints_chars": constraints_size,
+            "source_document_chars": source_size,
+            "lesson_count": lesson_count,
+            "resource_count": resource_count,
+            "large_input": requirement_size + constraints_size + source_size > 20000 or lesson_count > 8 or resource_count > 4,
+            "selected_agent_id": str(selected_agent.get("agent_id") or ""),
+            "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+            "selected_agent_provider": str(selected_agent.get("provider") or ""),
         }
 
     def _auto_protocol_request(
@@ -579,6 +903,11 @@ def build_protocol_router(
                     error_code="RESOURCE_NOT_FOUND",
                     message=f"Attached resource was not found: {resource_id}",
                 ) from exc
+        explicit_lessons = payload.get("run_lessons", []) if isinstance(payload.get("run_lessons", []), list) else []
+        source_run_id = str(payload.get("source_run_id") or "").strip()
+        run_lessons = [item for item in explicit_lessons if isinstance(item, Mapping)]
+        run_lessons.extend(_auto_protocol_run_lessons(store, source_run_id, access))
+        resource_summaries = _auto_protocol_resource_summaries(store, resource_refs)
         return ProtocolAutoDesignRequestRecord.model_validate({
             "mode": mode,
             "surface": str(payload.get("surface") or ("telegram" if auth.is_agent else "registry")),
@@ -587,6 +916,7 @@ def build_protocol_router(
             "target_protocol_id": target_protocol_id,
             "target_version_id": target_version_id,
             "target_draft_revision": target_draft_revision,
+            "source_run_id": source_run_id,
             "source_document": source_document,
             "available_agents": agents,
             "available_skills": [_routing_skill_json(item) for item in store.list_routing_skills()],
@@ -595,62 +925,143 @@ def build_protocol_router(
             "actor_ref": access.actor_ref,
             "chat_ref": str(payload.get("chat_ref") or ""),
             "resource_refs": resource_refs,
+            "resource_summaries": resource_summaries,
+            "run_lessons": run_lessons,
             "idempotency_key": str(payload.get("idempotency_key") or ""),
         })
 
-    def _auto_protocol_design_agent_id(
+    def _auto_protocol_model_request(
         request_payload: ProtocolAutoDesignRequestRecord,
-    ) -> str:
-        preferred = str(request_payload.preferred_design_agent_id or "").strip()
-        candidates = [item.as_dict() for item in request_payload.available_agents]
-        if preferred:
-            return preferred
-        for agent in candidates:
-            operations = {
-                str(item or "").strip()
-                for item in agent.get("supported_admin_operations", []) or []
-                if str(item or "").strip()
-            }
-            if "design_auto_protocol" in operations:
-                return str(agent.get("agent_id") or "").strip()
-        return str(candidates[0].get("agent_id") or "").strip() if candidates else ""
+    ) -> ProtocolAutoDesignModelRequestRecord:
+        return ProtocolAutoDesignModelRequestRecord(
+            mode=request_payload.mode,
+            requirement_text=request_payload.requirement_text,
+            constraints_text=request_payload.constraints_text,
+            source_document=request_payload.source_document,
+            available_agents=request_payload.available_agents,
+            available_skills=request_payload.available_skills,
+            workspace_ref=request_payload.workspace_ref,
+            actor_ref=request_payload.actor_ref,
+            chat_ref=request_payload.chat_ref,
+            resource_refs=request_payload.resource_refs,
+            resource_summaries=request_payload.resource_summaries,
+            run_lessons=request_payload.run_lessons,
+        )
 
-    async def _auto_protocol_model_response(
+    def _queue_auto_protocol_planner_task(
         store: AbstractRegistryStore,
         request_payload: ProtocolAutoDesignRequestRecord,
-    ):
-        agent_id = _auto_protocol_design_agent_id(request_payload)
-        if not agent_id:
-            raise _protocol_http_error(
-                409,
-                error_code="PROTOCOL_AUTO_PLANNER_UNAVAILABLE",
-                message="Connect a provider-capable agent before generating an Auto Protocol.",
-            )
-        result = await RegistryManagementClient(store).send(
-            agent_id=agent_id,
-            payload=DesignAutoProtocolRequest(
-                request=ProtocolAutoDesignModelRequestRecord(
-                    mode=request_payload.mode,
-                    requirement_text=request_payload.requirement_text,
-                    constraints_text=request_payload.constraints_text,
-                    source_document=request_payload.source_document,
-                    available_agents=request_payload.available_agents,
-                    available_skills=request_payload.available_skills,
-                    workspace_ref=request_payload.workspace_ref,
-                    actor_ref=request_payload.actor_ref,
-                    chat_ref=request_payload.chat_ref,
-                    resource_refs=request_payload.resource_refs,
-                ),
-            ),
-            timeout_seconds=90,
+        *,
+        session_id: str,
+    ) -> tuple[str, str, str, dict[str, object]]:
+        requested_agent_id = str(request_payload.preferred_design_agent_id or "").strip()
+        agent_id, planner_policy, selected_agent = _auto_design_agent_id(
+            store,
+            requested_agent_id=requested_agent_id,
         )
-        if not result.success or not isinstance(result.payload, DesignAutoProtocolResult):
-            raise _protocol_http_error(
-                502,
-                error_code="PROTOCOL_AUTO_PLANNER_FAILED",
-                message=result.error_detail or "Auto Protocol planner failed.",
+        conversation = store.create_conversation(
+            target_agent_id=agent_id,
+            title="Auto Protocol planner",
+            origin_channel="registry",
+            external_conversation_ref=f"protocol-auto-session:{session_id}",
+            source_kind="auto_design",
+            hidden_from_default_views=True,
+        )
+        routed_task_id = f"auto-design:{session_id}:{uuid.uuid4().hex[:12]}"
+        model_request = _auto_protocol_model_request(request_payload)
+        task_context = RegistryJsonRecord.model_validate({
+            "task_source_kind": "auto_design",
+            "auto_design": {
+                "session_id": session_id,
+                "request": model_request.model_dump(mode="json"),
+                "request_payload": request_payload.model_dump(mode="json"),
+            },
+        })
+        store.create_routed_task(
+            RoutedTaskRequest(
+                routed_task_id=routed_task_id,
+                parent_conversation_id=conversation.conversation_id,
+                origin_transport_ref=f"protocol-auto-session:{session_id}",
+                origin_agent_id=agent_id,
+                target_agent_id=agent_id,
+                title="Design Auto Protocol",
+                instructions="Run the Auto Protocol planner for this session and report the structured planner JSON.",
+                context=task_context,
+                constraints=RegistryJsonRecord.model_validate({
+                    "timeout_seconds": 3600,
+                    "source": "auto_protocol",
+                }),
+                requested_skills=["architecture", "testing"],
+                resource_refs=list(request_payload.resource_refs or []),
+                priority="high",
             )
-        return result.payload.response
+        )
+        return routed_task_id, agent_id, planner_policy, selected_agent
+
+    def _planning_auto_protocol_session(
+        request_payload: ProtocolAutoDesignRequestRecord,
+        *,
+        planner_task_id: str = "",
+        planner_agent_id: str = "",
+        planner_policy: str = "auto_select",
+        planner_state: Mapping[str, object] | None = None,
+        prompt_diagnostics: Mapping[str, object] | None = None,
+        session_id: str = "",
+        created_at: str = "",
+    ) -> ProtocolAutoDesignSessionRecord:
+        now = utcnow_iso()
+        return ProtocolAutoDesignSessionRecord(
+            session_id=session_id or uuid.uuid4().hex,
+            status="planning",
+            mode=request_payload.mode,
+            surface=request_payload.surface,
+            actor_ref=request_payload.actor_ref,
+            chat_ref=request_payload.chat_ref,
+            source_protocol_id=request_payload.target_protocol_id,
+            source_version_id=request_payload.target_version_id,
+            source_draft_revision=request_payload.target_draft_revision,
+            source_run_id=request_payload.source_run_id,
+            target_protocol_id=request_payload.target_protocol_id,
+            target_draft_revision=request_payload.target_draft_revision,
+            requirement_text=request_payload.requirement_text,
+            constraints_text=request_payload.constraints_text,
+            resource_refs=list(request_payload.resource_refs or []),
+            run_lessons=list(request_payload.run_lessons or []),
+            planner_request_id="",
+            planner_task_id=str(planner_task_id or ""),
+            planner_policy=str(planner_policy or "auto_select"),
+            planner_agent_id=str(planner_agent_id or ""),
+            planner_state=RegistryJsonRecord.model_validate(dict(planner_state or {})),
+            prompt_diagnostics=RegistryJsonRecord.model_validate(dict(prompt_diagnostics or {})),
+            source_document_json=request_payload.source_document,
+            change_summary=[
+                "Queued heavyweight Auto Protocol planning.",
+                "The planner is analyzing requirements, lessons, stages, artifacts, assignments, review gates, and runtime evidence.",
+            ],
+            created_at=created_at or now,
+            updated_at=now,
+        )
+
+    def _auto_protocol_failed_session(
+        session: ProtocolAutoDesignSessionRecord,
+        *,
+        code: str,
+        message: str,
+    ) -> ProtocolAutoDesignSessionRecord:
+        detail = re.sub(r"\s+", " ", str(message or "Auto Protocol planner failed.")).strip()
+        warning = ProtocolAutoDesignWarningRecord(
+            code=code,
+            message=detail[:1000],
+            severity="error",
+            section="planner",
+            action="retry_generation",
+        )
+        return session.model_copy(update={
+            "status": "failed",
+            "warnings": [warning],
+            "unresolved_decisions": [warning],
+            "change_summary": [detail[:1000]],
+        })
 
     def _attach_auto_protocol_resources(
         store: AbstractRegistryStore,
@@ -676,6 +1087,14 @@ def build_protocol_router(
                     error_code="RESOURCE_NOT_FOUND",
                     message=f"Attached resource was not found: {token}",
                 ) from exc
+
+    def _auto_protocol_session_error_details(session: ProtocolAutoDesignSessionRecord) -> dict[str, object]:
+        return {
+            "session_id": str(session.session_id or ""),
+            "planner_task_id": str(session.planner_task_id or ""),
+            "planner_request_id": str(session.planner_request_id or ""),
+            "status": str(session.status or ""),
+        }
 
     def _artifact_for_detail(detail, artifact_key: str) -> ProtocolArtifactRecord:
         artifact = next(
@@ -768,6 +1187,16 @@ def build_protocol_router(
         summary: str,
         metadata: dict[str, object] | None = None,
     ) -> ProtocolArtifactRuntimeEventRecord:
+        event_metadata = dict(metadata or {})
+        if str(actor_ref or "").startswith("runtime-capability:"):
+            actor_parts = str(actor_ref or "").split(":", 3)
+            event_metadata.setdefault("source", "agent_runtime_capability")
+            if len(actor_parts) > 1:
+                event_metadata.setdefault("capability_token_id", actor_parts[1])
+            if len(actor_parts) > 2:
+                event_metadata.setdefault("actor_stage_execution_id", actor_parts[2])
+            if len(actor_parts) > 3:
+                event_metadata.setdefault("participant_key", actor_parts[3])
         return ProtocolArtifactRuntimeEventRecord(
             runtime_event_id=uuid.uuid4().hex,
             runtime_instance_id=runtime.runtime_instance_id,
@@ -776,7 +1205,7 @@ def build_protocol_router(
             event_kind=event_kind,
             actor_ref=actor_ref,
             summary=summary,
-            metadata_json=RegistryJsonRecord(metadata or {}),
+            metadata_json=RegistryJsonRecord(event_metadata),
         )
 
     def _runtime_public_urls(run_id: str, artifact_key: str) -> dict[str, str]:
@@ -791,6 +1220,197 @@ def build_protocol_router(
     def _runtime_record_json(runtime: ProtocolArtifactRuntimeInstanceRecord | None) -> dict[str, object] | None:
         return _json_payload(runtime) if runtime is not None else None
 
+    def _auto_acceptance_contract_for_detail(detail) -> dict[str, object]:
+        document = canonical_protocol_document(detail.version.definition_json.as_dict())
+        metadata = document.metadata.as_dict()
+        auto_protocol = metadata.get("auto_protocol") if isinstance(metadata, Mapping) else {}
+        if not isinstance(auto_protocol, Mapping):
+            return {}
+        contract = auto_protocol.get("acceptance_contract")
+        if not isinstance(contract, Mapping):
+            return {}
+        result = dict(contract)
+        try:
+            schema_version = int(result.get("schema_version", 1) or 1)
+        except (TypeError, ValueError):
+            schema_version = 1
+        if schema_version < 2:
+            return result
+        contract_key = str(result.get("contract_artifact_key", "") or "").strip() or "auto_protocol_contract"
+        snapshots = [
+            item
+            for item in getattr(detail, "artifact_snapshots", []) or []
+            if str(item.artifact_key or "").strip() == contract_key
+        ]
+        snapshots.sort(key=lambda item: (str(item.created_at or ""), str(item.artifact_snapshot_id or "")), reverse=True)
+        for snapshot in snapshots:
+            path = artifact_snapshot_storage_path(load_registry_config().artifact_store_dir, snapshot)
+            if path is None:
+                raw_path = Path(str(snapshot.storage_uri or "")).expanduser()
+                if raw_path.exists():
+                    path = raw_path
+            if path is None or not path.is_file():
+                continue
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(loaded, Mapping):
+                result["resolved_contract_artifact"] = dict(loaded)
+                break
+        return result
+
+    def _contract_journeys(contract: Mapping[str, object]) -> dict[str, dict[str, object]]:
+        raw = contract.get("required_journeys")
+        if raw is None:
+            resolved = contract.get("resolved_contract_artifact")
+            verification = resolved.get("verification_contract") if isinstance(resolved, Mapping) else {}
+            if isinstance(verification, Mapping):
+                raw = verification.get("required_journeys") or verification.get("browser_journeys")
+        if not isinstance(raw, list):
+            return {}
+        result: dict[str, dict[str, object]] = {}
+        for item in raw:
+            if not isinstance(item, Mapping):
+                continue
+            journey = dict(item)
+            key = str(journey.get("journey_key", "") or "").strip()
+            if key:
+                result[key] = journey
+        return result
+
+    def _runtime_manifest_hooks(manifest: ProtocolArtifactRuntimeManifestRecord) -> dict[str, object]:
+        return {
+            str(item.hook or "").strip(): item
+            for item in manifest.test_hooks
+            if str(item.hook or "").strip()
+        }
+
+    def _detail_artifact_content_hash(detail, artifact_key: str) -> str:
+        key = str(artifact_key or "").strip()
+        snapshots = [
+            item
+            for item in getattr(detail, "artifact_snapshots", []) or []
+            if str(getattr(item, "artifact_key", "") or "").strip() == key
+            and str(getattr(item, "content_hash", "") or "").strip()
+        ]
+        if snapshots:
+            snapshots.sort(key=lambda item: (str(getattr(item, "created_at", "") or ""), str(getattr(item, "artifact_snapshot_id", "") or "")), reverse=True)
+            return str(snapshots[0].content_hash or "").strip()
+        artifact = next(
+            (
+                item
+                for item in getattr(detail, "artifacts", []) or []
+                if str(getattr(item, "artifact_key", "") or "").strip() == key
+                and str(getattr(item, "content_hash", "") or "").strip()
+            ),
+            None,
+        )
+        return str(getattr(artifact, "content_hash", "") or "").strip() if artifact is not None else ""
+
+    def _matching_journey_request_event(
+        events: list[ProtocolArtifactRuntimeEventRecord],
+        *,
+        journey_key: str,
+        journey_run_id: str,
+        runtime_instance_id: str,
+        artifact_content_hash: str,
+    ) -> ProtocolArtifactRuntimeEventRecord | None:
+        key = str(journey_key or "").strip()
+        run_id = str(journey_run_id or "").strip()
+        runtime_id = str(runtime_instance_id or "").strip()
+        content_hash = str(artifact_content_hash or "").strip()
+        for event in sorted(events, key=lambda item: str(item.created_at or ""), reverse=True):
+            if str(event.event_kind or "") != "journey_requested":
+                continue
+            metadata = event.metadata_json.as_dict()
+            if str(metadata.get("journey_key", "") or "").strip() != key:
+                continue
+            if str(metadata.get("journey_run_id", "") or "").strip() != run_id:
+                continue
+            if runtime_id and str(event.runtime_instance_id or "").strip() != runtime_id:
+                continue
+            requested_hash = str(metadata.get("artifact_content_hash", "") or "").strip()
+            if content_hash and requested_hash != content_hash:
+                continue
+            return event
+        return None
+
+    def _runtime_journey_spec(
+        *,
+        detail,
+        artifact_key: str,
+        journey_key: str,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+    ) -> ProtocolRuntimeJourneySpecRecord:
+        contract = _auto_acceptance_contract_for_detail(detail)
+        journeys = _contract_journeys(contract)
+        journey = journeys.get(str(journey_key or "").strip())
+        if journey is None:
+            raise _protocol_http_error(
+                404,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_NOT_FOUND",
+                message="Runtime journey is not declared by this protocol acceptance contract.",
+                details={"journey_key": journey_key},
+            )
+        manifest = runtime.manifest or ProtocolArtifactRuntimeManifestRecord()
+        hooks = _runtime_manifest_hooks(manifest)
+        required_hooks: set[str] = set()
+        raw_required = journey.get("required_hooks")
+        if isinstance(raw_required, list):
+            for item in raw_required:
+                if isinstance(item, Mapping):
+                    hook = str(item.get("hook", "") or item.get("hook_id", "") or "").strip()
+                else:
+                    hook = str(item or "").strip()
+                if hook:
+                    required_hooks.add(hook)
+        for key in ("steps", "assertions"):
+            raw_steps = journey.get(key)
+            if isinstance(raw_steps, list):
+                for step in raw_steps:
+                    if isinstance(step, Mapping) and str(step.get("hook", "") or "").strip():
+                        required_hooks.add(str(step.get("hook", "") or "").strip())
+        missing_hooks = sorted(required_hooks - set(hooks))
+        if missing_hooks:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_HOOK_MISSING",
+                message="Runtime journey requires hooks that are missing from octopus-runtime.json.test_hooks.",
+                details={"missing_hooks": missing_hooks},
+            )
+        raw_steps = journey.get("steps")
+        raw_assertions = journey.get("assertions")
+        steps = [
+            RegistryJsonRecord.model_validate(dict(item))
+            for item in raw_steps
+            if isinstance(raw_steps, list) and isinstance(item, Mapping)
+        ] if isinstance(raw_steps, list) else []
+        assertions = [
+            RegistryJsonRecord.model_validate(dict(item))
+            for item in raw_assertions
+            if isinstance(raw_assertions, list) and isinstance(item, Mapping)
+        ] if isinstance(raw_assertions, list) else []
+        return ProtocolRuntimeJourneySpecRecord(
+            protocol_run_id=runtime.protocol_run_id,
+            artifact_key=artifact_key,
+            journey_key=str(journey_key or "").strip(),
+            target_url=f"/runtime/protocol-runs/{runtime.protocol_run_id}/artifacts/{artifact_key}/app/",
+            timeout_ms=int(journey.get("timeout_ms", 120000) or 120000),
+            steps=steps,
+            assertions=assertions,
+            hooks={key: value for key, value in hooks.items() if not required_hooks or key in required_hooks},
+            allowed_external_origins=[
+                str(item or "").strip()
+                for item in (journey.get("allowed_external_origins") if isinstance(journey.get("allowed_external_origins"), list) else [])
+                if str(item or "").strip()
+            ],
+            metadata_json=RegistryJsonRecord({
+                "description": str(journey.get("description", "") or ""),
+                "required_hooks": sorted(required_hooks),
+            }),
+        )
+
     def _merge_runtime_record(
         existing: ProtocolArtifactRuntimeInstanceRecord,
         update: ProtocolArtifactRuntimeInstanceRecord,
@@ -802,16 +1422,68 @@ def build_protocol_router(
             "manifest",
             "manifest_path",
             "artifact_path",
-            "runtime_url",
-            "ui_url",
-            "api_url",
-            "health_url",
             "internal_url",
         ):
             if not update_payload.get(key):
                 update_payload.pop(key, None)
+        for key in ("runtime_url", "ui_url", "api_url", "health_url"):
+            update_payload.pop(key, None)
         payload.update(update_payload)
+        payload.update(_runtime_public_urls(
+            str(payload.get("protocol_run_id") or existing.protocol_run_id),
+            str(payload.get("artifact_key") or existing.artifact_key),
+        ))
         return ProtocolArtifactRuntimeInstanceRecord.model_validate(payload)
+
+    def _runtime_health_fingerprint(health: object) -> dict[str, object]:
+        return {
+            "ok": bool(getattr(health, "ok", False)),
+            "status": str(getattr(health, "status", "") or ""),
+            "status_code": int(getattr(health, "status_code", 0) or 0),
+        }
+
+    def _append_runtime_health_event_if_changed(
+        store: AbstractRegistryStore,
+        *,
+        runtime: ProtocolArtifactRuntimeInstanceRecord,
+        health: object,
+        access: ProtocolAccessContextRecord,
+    ) -> ProtocolArtifactRuntimeEventRecord | None:
+        fingerprint = _runtime_health_fingerprint(health)
+        try:
+            events = store.list_protocol_artifact_runtime_events(
+                runtime.protocol_run_id,
+                runtime.artifact_key,
+                access=access,
+                limit=1,
+                event_kind="health_checked",
+            )
+        except (AttributeError, NotImplementedError):
+            events = []
+        for event in events:
+            if str(event.runtime_instance_id or "") != str(runtime.runtime_instance_id or ""):
+                continue
+            if str(event.event_kind or "") != "health_checked":
+                continue
+            metadata = event.metadata_json.as_dict()
+            previous = {
+                "ok": bool(metadata.get("ok")),
+                "status": str(metadata.get("status", "") or ""),
+                "status_code": int(metadata.get("status_code", 0) or 0),
+            }
+            if previous == fingerprint:
+                return None
+            break
+        return store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="health_checked",
+                actor_ref=access.actor_ref,
+                summary=str(getattr(health, "message", "") or "Runtime health checked."),
+                metadata=fingerprint,
+            ),
+            access=access,
+        )
 
     def _metadata_from_auto_session(session: ProtocolAutoDesignSessionRecord) -> dict[str, str]:
         doc = session.draft_definition_json.as_dict()
@@ -828,6 +1500,12 @@ def build_protocol_router(
         *,
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
+        if not _auto_protocol_can_apply_operator_surface(access):
+            raise _protocol_http_error(
+                403,
+                error_code="PROTOCOL_AUTO_APPLY_ROLE_REQUIRED",
+                message="Applying a generated Auto Protocol draft requires publisher or admin authoring access.",
+            )
         metadata = _metadata_from_auto_session(session)
         definition_json = session.draft_definition_json
         result = store.save_protocol_draft(
@@ -837,7 +1515,7 @@ def build_protocol_router(
             display_name=metadata["display_name"],
             description=metadata["description"],
             definition_json=definition_json,
-            authoring_surface="standard",
+            authoring_surface="operator",
             expected_revision=int(session.target_draft_revision or 0) if session.target_protocol_id else None,
         )
         if not result.ok and str(result.status or "") == "duplicate_slug" and not str(session.target_protocol_id or "").strip():
@@ -855,7 +1533,7 @@ def build_protocol_router(
                 display_name=metadata["display_name"],
                 description=metadata["description"],
                 definition_json=definition_json,
-                authoring_surface="standard",
+                authoring_surface="operator",
                 expected_revision=None,
             )
         if not result.ok:
@@ -906,6 +1584,12 @@ def build_protocol_router(
         )
 
     def _ensure_auto_protocol_ready(session: ProtocolAutoDesignSessionRecord, *, action: str) -> None:
+        if str(session.status or "") == "planning":
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_AUTO_PLANNING",
+                message="Auto Protocol is still designing this session. Wait for planning to finish before continuing.",
+            )
         unresolved = list(session.unresolved_decisions or [])
         validation = session.validation
         if validation.ok and not unresolved:
@@ -1061,21 +1745,64 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             request_payload = _auto_protocol_request(payload, auth=auth, access=access, store=store)
-            model_response = await _auto_protocol_model_response(store, request_payload)
-            request_payload = request_payload.model_copy(update={"model_response": model_response})
-            session = store.create_protocol_auto_design_session(request_payload, access=access)
-            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            session_id = uuid.uuid4().hex
+            planner_task_id, planner_agent_id, planner_policy, selected_agent = _queue_auto_protocol_planner_task(
+                store,
+                request_payload,
+                session_id=session_id,
+            )
+            prompt_diagnostics = _auto_protocol_prompt_diagnostics(request_payload, selected_agent=selected_agent)
+            planner_state = {
+                "planner_status": "queued",
+                "queued_at": utcnow_iso(),
+                "selected_agent_id": planner_agent_id,
+                "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+                "selected_agent_provider": str(selected_agent.get("provider") or ""),
+                "timeout_seconds": 3600,
+                "progress_summary": "Queued for Auto Protocol planning.",
+            }
+            session = store.update_protocol_auto_design_session(
+                _planning_auto_protocol_session(
+                    request_payload,
+                    planner_task_id=planner_task_id,
+                    planner_agent_id=planner_agent_id,
+                    planner_policy=planner_policy,
+                    planner_state=planner_state,
+                    prompt_diagnostics=prompt_diagnostics,
+                    session_id=session_id,
+                ),
+                access=access,
+                event_kind="planning_started",
+            )
+            try:
+                _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            except PermissionError as exc:
+                raise _protocol_http_error(
+                    403,
+                    error_code="PROTOCOL_FORBIDDEN",
+                    message=str(exc),
+                    details=_auto_protocol_session_error_details(session),
+                ) from exc
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                error_code = str(detail.get("error_code") or "PROTOCOL_AUTO_SESSION_ATTACHMENT_FAILED")
+                message = str(detail.get("message") or "Auto Protocol session was queued, but attached resources could not be linked.")
+                details = dict(_auto_protocol_session_error_details(session))
+                extra = detail.get("details")
+                if isinstance(extra, dict):
+                    details.update(extra)
+                raise _protocol_http_error(exc.status_code, error_code=error_code, message=message, details=details) from exc
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:
             raise _protocol_http_error(exc.status_code, error_code=exc.error_code, message=exc.detail) from exc
         except ValidationError as exc:
             raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message=str(exc)) from exc
-        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.created")
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.planning")
         return _json_payload(session)
 
     @router.get("/v1/protocol-auto/sessions/{session_id}")
-    def resource_get_protocol_auto_session(
+    async def resource_get_protocol_auto_session(
         session_id: str,
         auth: AuthContext = Depends(require_authenticated),
         store: AbstractRegistryStore = Depends(get_store),
@@ -1088,6 +1815,33 @@ def build_protocol_router(
         except KeyError as exc:
             raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
         return _json_payload(session)
+
+    @router.get("/v1/protocol-auto/sessions")
+    async def resource_list_protocol_auto_sessions(
+        status: str = Query(default=""),
+        limit: int = Query(default=25, ge=1, le=100),
+        cursor: int = Query(default=0, ge=0),
+        auth: AuthContext = Depends(require_authenticated),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = _auto_protocol_access(auth)
+        try:
+            fetch_limit = min(limit + 1, 101)
+            sessions = store.list_protocol_auto_design_sessions(
+                access=access,
+                cursor=cursor,
+                limit=fetch_limit,
+                status=status,
+            )
+            has_next = len(sessions) > limit
+            sessions = sessions[:limit]
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
+        next_cursor = cursor + limit if has_next else None
+        return {
+            "items": [item.model_dump(mode="json") for item in sessions],
+            "next_cursor": next_cursor,
+        }
 
     @router.get("/v1/protocol-auto/sessions/{session_id}/events")
     def resource_list_protocol_auto_session_events(
@@ -1114,6 +1868,12 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             existing = store.get_protocol_auto_design_session(session_id, access=access)
+            if str(existing.status or "") == "planning":
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_AUTO_PLANNING",
+                    message="Auto Protocol is still designing this session. Wait for planning to finish before revising it.",
+                )
             request_payload = _auto_protocol_request({
                 **payload,
                 "mode": "revise",
@@ -1122,16 +1882,53 @@ def build_protocol_router(
             }, auth=auth, access=access, store=store, default_mode="revise")
             if not request_payload.source_document.as_dict():
                 request_payload = request_payload.model_copy(update={"source_document": existing.draft_definition_json})
-            model_response = await _auto_protocol_model_response(store, request_payload)
-            request_payload = request_payload.model_copy(update={"model_response": model_response})
-            revised = revise_auto_protocol_session(
+            planner_task_id, planner_agent_id, planner_policy, selected_agent = _queue_auto_protocol_planner_task(
+                store,
                 request_payload,
                 session_id=existing.session_id,
-                created_at=existing.created_at,
-                updated_at=existing.updated_at,
             )
-            session = store.update_protocol_auto_design_session(revised, access=access, event_kind="revised")
-            _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            prompt_diagnostics = _auto_protocol_prompt_diagnostics(request_payload, selected_agent=selected_agent)
+            planner_state = {
+                "planner_status": "queued",
+                "queued_at": utcnow_iso(),
+                "selected_agent_id": planner_agent_id,
+                "selected_agent_display_name": str(selected_agent.get("display_name") or ""),
+                "selected_agent_provider": str(selected_agent.get("provider") or ""),
+                "timeout_seconds": 3600,
+                "progress_summary": "Queued for Auto Protocol planning.",
+            }
+            session = store.update_protocol_auto_design_session(
+                _planning_auto_protocol_session(
+                    request_payload,
+                    planner_task_id=planner_task_id,
+                    planner_agent_id=planner_agent_id,
+                    planner_policy=planner_policy,
+                    planner_state=planner_state,
+                    prompt_diagnostics=prompt_diagnostics,
+                    session_id=existing.session_id,
+                    created_at=existing.created_at,
+                ),
+                access=access,
+                event_kind="planning_started",
+            )
+            try:
+                _attach_auto_protocol_resources(store, session, actor_ref=access.actor_ref)
+            except PermissionError as exc:
+                raise _protocol_http_error(
+                    403,
+                    error_code="PROTOCOL_FORBIDDEN",
+                    message=str(exc),
+                    details=_auto_protocol_session_error_details(session),
+                ) from exc
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, dict) else {}
+                error_code = str(detail.get("error_code") or "PROTOCOL_AUTO_SESSION_ATTACHMENT_FAILED")
+                message = str(detail.get("message") or "Auto Protocol session was queued, but attached resources could not be linked.")
+                details = dict(_auto_protocol_session_error_details(session))
+                extra = detail.get("details")
+                if isinstance(extra, dict):
+                    details.update(extra)
+                raise _protocol_http_error(exc.status_code, error_code=error_code, message=message, details=details) from exc
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
         except ManagementClientError as exc:
@@ -1140,7 +1937,7 @@ def build_protocol_router(
             raise _protocol_http_error(404, error_code="PROTOCOL_AUTO_SESSION_NOT_FOUND", message="Auto Protocol session not found.") from exc
         except ValidationError as exc:
             raise _protocol_http_error(400, error_code="PROTOCOL_AUTO_INVALID", message=str(exc)) from exc
-        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.revised")
+        await broadcast_invalidations(topics=("protocols", f"protocol-auto-session:{session.session_id}"), reason="protocol.auto.planning")
         return _json_payload(session)
 
     @router.post("/v1/protocol-auto/sessions/{session_id}/apply")
@@ -1152,6 +1949,12 @@ def build_protocol_router(
         access = _auto_protocol_access(auth)
         try:
             session = store.get_protocol_auto_design_session(session_id, access=access)
+            if str(session.status or "") == "planning":
+                raise _protocol_http_error(
+                    409,
+                    error_code="PROTOCOL_AUTO_PLANNING",
+                    message="Auto Protocol is still designing this session. Wait for planning to finish before applying it.",
+                )
             session = _apply_auto_protocol_session(store, session, access=access)
         except PermissionError as exc:
             raise _protocol_http_error(403, error_code="PROTOCOL_FORBIDDEN", message=str(exc)) from exc
@@ -2614,10 +3417,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         try:
             detail = store.get_protocol_run(run_id, access=access)
             artifact = _artifact_for_detail(detail, artifact_key)
@@ -2661,10 +3463,15 @@ def build_protocol_router(
             )
             if result.success and isinstance(result.payload, ArtifactRuntimeHealthResult) and result.payload.health.runtime is not None:
                 health = result.payload.health
+                merged_runtime = _merge_runtime_record(runtime, result.payload.health.runtime)
+                if health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                    merged_runtime = merged_runtime.model_copy(update={"status": "running"})
                 runtime = store.save_protocol_artifact_runtime(
-                    _merge_runtime_record(runtime, result.payload.health.runtime),
+                    merged_runtime,
                     access=access,
                 )
+                if health.ok:
+                    _append_runtime_health_event_if_changed(store, runtime=runtime, health=health, access=access)
         return {
             "runtime": _runtime_record_json(runtime),
             "health": _json_payload(health) if health is not None else None,
@@ -2677,10 +3484,9 @@ def build_protocol_router(
     async def resource_start_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:start")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         try:
             detail = store.get_protocol_run(run_id, access=access)
             artifact = _artifact_for_detail(detail, artifact_key)
@@ -2750,10 +3556,16 @@ def build_protocol_router(
                 and isinstance(existing_result.payload, ArtifactRuntimeHealthResult)
                 and existing_result.payload.health.runtime is not None
             ):
+                existing_health = existing_result.payload.health
+                merged_runtime = _merge_runtime_record(existing_runtime, existing_health.runtime)
+                if existing_health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                    merged_runtime = merged_runtime.model_copy(update={"status": "running"})
                 refreshed = store.save_protocol_artifact_runtime(
-                    _merge_runtime_record(existing_runtime, existing_result.payload.health.runtime),
+                    merged_runtime,
                     access=access,
                 )
+                if existing_health.ok:
+                    _append_runtime_health_event_if_changed(store, runtime=refreshed, health=existing_health, access=access)
                 refreshed_status = str(refreshed.status or "").strip().lower()
                 if refreshed_status in {"running", "starting"}:
                     store.append_protocol_artifact_runtime_event(
@@ -2884,10 +3696,9 @@ def build_protocol_router(
     async def resource_stop_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:stop")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -2929,7 +3740,7 @@ def build_protocol_router(
     def resource_archive_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         access = protocol_access(auth)
@@ -2954,7 +3765,7 @@ def build_protocol_router(
     def resource_delete_protocol_artifact_runtime(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        auth: AuthContext = Depends(require_operator_session),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         access = protocol_access(auth)
@@ -2980,26 +3791,256 @@ def build_protocol_router(
         run_id: str,
         artifact_key: str,
         limit: int = Query(default=50, ge=1, le=200),
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
         events = store.list_protocol_artifact_runtime_events(
             run_id,
             artifact_key,
-            access=protocol_access(auth),
+            access=access,
             limit=limit,
         )
         return _json_payload({"items": events})
+
+    @router.get("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}")
+    def resource_get_protocol_artifact_runtime_journey(
+        run_id: str,
+        artifact_key: str,
+        journey_key: str,
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("journey:read")),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        spec = _runtime_journey_spec(
+            detail=detail,
+            artifact_key=artifact_key,
+            journey_key=journey_key,
+            runtime=runtime,
+        )
+        return _json_payload({"spec": spec})
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}/results")
+    async def resource_post_protocol_artifact_runtime_journey_result(
+        request: Request,
+        run_id: str,
+        artifact_key: str,
+        journey_key: str,
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("journey:result")),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        try:
+            payload = await request.json()
+        except ValueError:
+            payload = {}
+        if not isinstance(payload, Mapping):
+            payload = {}
+        journey_run_id = str(payload.get("journey_run_id", "") or "").strip()
+        if not journey_run_id:
+            raise _protocol_http_error(
+                400,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_RUN_ID_REQUIRED",
+                message="Structured journey results must reference a Registry-issued journey_run_id.",
+            )
+        artifact_content_hash = _detail_artifact_content_hash(detail, artifact_key)
+        prior_events = store.list_protocol_artifact_runtime_events(
+            run_id,
+            artifact_key,
+            access=access,
+            limit=200,
+        )
+        requested_event = _matching_journey_request_event(
+            prior_events,
+            journey_key=journey_key,
+            journey_run_id=journey_run_id,
+            runtime_instance_id=runtime.runtime_instance_id,
+            artifact_content_hash=artifact_content_hash,
+        )
+        if requested_event is None:
+            raise _protocol_http_error(
+                409,
+                error_code="PROTOCOL_RUNTIME_JOURNEY_NOT_REQUESTED",
+                message="Structured journey result does not match an open Registry-issued journey request for the current runtime artifact.",
+                details={"journey_key": journey_key, "journey_run_id": journey_run_id},
+            )
+        status = str(payload.get("status", "") or "").strip().lower()
+        ok = bool(payload.get("ok")) if "ok" in payload else status in {"passed", "ok", "completed", "success"}
+        if not status:
+            status = "passed" if ok else "failed"
+        raw_assertions = payload.get("assertions", [])
+        assertions = [
+            RegistryJsonRecord.model_validate(dict(item))
+            for item in raw_assertions
+            if isinstance(raw_assertions, list) and isinstance(item, Mapping)
+        ] if isinstance(raw_assertions, list) else []
+        console_errors = [
+            str(item or "")[:1000]
+            for item in (payload.get("console_errors", []) if isinstance(payload.get("console_errors"), list) else [])
+            if str(item or "").strip()
+        ]
+        result = ProtocolRuntimeJourneyResultRecord(
+            protocol_run_id=run_id,
+            artifact_key=artifact_key,
+            journey_key=journey_key,
+            journey_run_id=journey_run_id,
+            ok=ok,
+            status=status,
+            summary=str(payload.get("summary", "") or ("Journey completed successfully." if ok else "Journey failed."))[:1000],
+            assertions=assertions,
+            console_errors=console_errors,
+            duration_ms=int(payload.get("duration_ms", 0) or 0),
+            metadata_json=RegistryJsonRecord.model_validate(payload.get("metadata_json", {}) if isinstance(payload.get("metadata_json"), Mapping) else {}),
+        )
+        metadata = result.model_dump(mode="json")
+        metadata.update({
+            "journey_key": journey_key,
+            "journey_run_id": result.journey_run_id,
+            "ok": result.ok,
+            "status": result.status,
+            "source": "registry_journey_runner",
+            "requested_event_id": requested_event.runtime_event_id,
+            "runtime_instance_id": runtime.runtime_instance_id,
+            "artifact_content_hash": artifact_content_hash,
+        })
+        event = store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="journey_completed" if result.ok else "journey_failed",
+                actor_ref=access.actor_ref,
+                summary=result.summary,
+                metadata=metadata,
+            ),
+            access=access,
+        )
+        await broadcast_invalidations(
+            topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason="protocol.runtime.journey_result",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_runtime.journey_result",
+            reason="protocol.runtime.journey_result",
+        )
+        return _json_payload({"result": result, "event": event})
+
+    @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/journeys/{journey_key}/run")
+    async def resource_run_protocol_artifact_runtime_journey(
+        run_id: str,
+        artifact_key: str,
+        journey_key: str,
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        access = protocol_access(auth)
+        try:
+            detail = store.get_protocol_run(run_id, access=access)
+        except PermissionError as exc:
+            raise _protocol_http_error(403, error_code="PROTOCOL_NOT_VISIBLE", message="Protocol run is not visible to this actor.") from exc
+        except KeyError as exc:
+            raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Protocol run not found.") from exc
+        runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
+        if runtime is None:
+            raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
+        if not str(runtime.agent_id or "").strip():
+            raise _protocol_http_error(409, error_code="PROTOCOL_ARTIFACT_RUNTIME_AGENT_UNAVAILABLE", message="Runtime does not have an assigned agent.")
+        spec = _runtime_journey_spec(
+            detail=detail,
+            artifact_key=artifact_key,
+            journey_key=journey_key,
+            runtime=runtime,
+        )
+        current_stage_execution_id = str(getattr(detail.run, "current_stage_execution_id", "") or "").strip()
+        stage_execution = next(
+            (item for item in detail.stage_executions if str(item.protocol_stage_execution_id or "") == current_stage_execution_id),
+            None,
+        )
+        if stage_execution is None:
+            raise _protocol_http_error(409, error_code="PROTOCOL_STAGE_EXECUTION_UNAVAILABLE", message="No current protocol stage execution is available for scoped journey execution.")
+        expires_at = (datetime.fromisoformat(utcnow_iso()) + timedelta(minutes=30)).isoformat()
+        token = store.mint_runtime_capability_token(
+            protocol_run_id=run_id,
+            protocol_stage_execution_id=current_stage_execution_id,
+            artifact_key=artifact_key,
+            participant_key=str(stage_execution.participant_key or ""),
+            target_agent_id=runtime.agent_id,
+            allowed_actions=["runtime:read", "runtime:fetch", "journey:read", "journey:result", "journey:run"],
+            expires_at=expires_at,
+            actor_ref=access.actor_ref,
+        )
+        journey_run_id = uuid.uuid4().hex
+        artifact_content_hash = _detail_artifact_content_hash(detail, artifact_key)
+        requested = store.append_protocol_artifact_runtime_event(
+            _runtime_event(
+                runtime=runtime,
+                event_kind="journey_requested",
+                actor_ref=access.actor_ref,
+                summary=f"Journey {journey_key} requested.",
+                metadata={
+                    "journey_key": journey_key,
+                    "journey_run_id": journey_run_id,
+                    "source": "operator_journey_run",
+                    "runtime_instance_id": runtime.runtime_instance_id,
+                    "artifact_content_hash": artifact_content_hash,
+                },
+            ),
+            access=access,
+        )
+        management_request = store.create_management_request(
+            ManagementRequest(
+                agent_id=runtime.agent_id,
+                payload=RunArtifactJourneyRequest(
+                    runtime_instance_id=runtime.runtime_instance_id,
+                    protocol_run_id=run_id,
+                    artifact_key=artifact_key,
+                    journey_key=journey_key,
+                    journey_run_id=journey_run_id,
+                    registry_url="",
+                    capability_ref=token.capability_ref,
+                    spec=spec,
+                ),
+                timeout_seconds=max(30, min(600, int(spec.timeout_ms / 1000) + 15)),
+            )
+        )
+        await broadcast_invalidations(
+            topics=("protocols", "summary", f"protocol-run:{run_id}"),
+            reason="protocol.runtime.journey_requested",
+        )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_runtime.journey_requested",
+            reason="protocol.runtime.journey_requested",
+        )
+        return _json_payload({
+            "journey_run_id": journey_run_id,
+            "status": "queued",
+            "requested_event": requested,
+            "management_request": management_request,
+        })
 
     @router.post("/v1/protocol-runs/{run_id}/artifacts/{artifact_key}/runtime/client-event")
     async def resource_record_protocol_artifact_runtime_client_event(
         request: Request,
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:event")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3046,10 +4087,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime_logs(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3074,10 +4114,9 @@ def build_protocol_router(
     async def resource_get_protocol_artifact_runtime_health(
         run_id: str,
         artifact_key: str,
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:read")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> dict[str, Any]:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3093,20 +4132,11 @@ def build_protocol_router(
         if not result.success or not isinstance(result.payload, ArtifactRuntimeHealthResult):
             raise _protocol_http_error(502, error_code="PROTOCOL_ARTIFACT_RUNTIME_HEALTH_FAILED", message=result.error_detail or "Bot failed to check artifact runtime health.")
         if result.payload.health.runtime is not None:
-            runtime = store.save_protocol_artifact_runtime(
-                _merge_runtime_record(runtime, result.payload.health.runtime),
-                access=access,
-            )
-        store.append_protocol_artifact_runtime_event(
-            _runtime_event(
-                runtime=runtime,
-                event_kind="health_checked",
-                actor_ref=access.actor_ref,
-                summary=result.payload.health.message,
-                metadata={"ok": result.payload.health.ok, "status_code": result.payload.health.status_code},
-            ),
-            access=access,
-        )
+            merged_runtime = _merge_runtime_record(runtime, result.payload.health.runtime)
+            if result.payload.health.ok and str(merged_runtime.status or "").strip().lower() == "starting":
+                merged_runtime = merged_runtime.model_copy(update={"status": "running"})
+            runtime = store.save_protocol_artifact_runtime(merged_runtime, access=access)
+        _append_runtime_health_event_if_changed(store, runtime=runtime, health=result.payload.health, access=access)
         return _json_payload(result.payload.health)
 
     @router.api_route(
@@ -3134,10 +4164,9 @@ def build_protocol_router(
         run_id: str,
         artifact_key: str,
         proxy_path: str = "",
-        auth: AuthContext = Depends(require_authenticated),
+        access: ProtocolAccessContextRecord = Depends(_runtime_access("runtime:fetch")),
         store: AbstractRegistryStore = Depends(get_store),
     ) -> Response:
-        access = protocol_access(auth)
         runtime = store.get_protocol_artifact_runtime(run_id, artifact_key, access=access)
         if runtime is None:
             raise _protocol_http_error(404, error_code="PROTOCOL_ARTIFACT_RUNTIME_NOT_FOUND", message="Artifact runtime not found.")
@@ -3267,6 +4296,39 @@ def build_protocol_router(
             run_id=run_id,
             event_kind="protocol_run.terminal" if str(result.run.status if result.run is not None else "") in {"completed", "failed", "cancelled"} else "protocol_run.updated",
             reason=f"protocol.run.{action}",
+        )
+        return _json_payload(result)
+
+    @router.post("/v1/protocol-runs/{run_id}/fork-from-stage")
+    async def resource_fork_protocol_run_from_stage(
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        auth: AuthContext = Depends(require_operator_session),
+        store: AbstractRegistryStore = Depends(get_store),
+    ) -> dict[str, Any]:
+        result = store.fork_protocol_run_from_stage(
+            run_id,
+            payload,
+            access=protocol_access(auth),
+            idempotency_key=str(idempotency_key or "").strip(),
+        )
+        if not result.ok:
+            raise _protocol_result_http_error(result)
+        topics = {"protocols", "summary", f"protocol-run:{run_id}"}
+        if result.run is not None:
+            topics.add(f"protocol-run:{result.run.protocol_run_id}")
+        await broadcast_invalidations(topics=topics, reason="protocol.run.forked")
+        if result.run is not None:
+            await broadcast_topic_event(
+                run_id=result.run.protocol_run_id,
+                event_kind="protocol_run.updated",
+                reason="protocol.run.forked",
+            )
+        await broadcast_topic_event(
+            run_id=run_id,
+            event_kind="protocol_run.updated",
+            reason="protocol.run.fork_child_created",
         )
         return _json_payload(result)
 

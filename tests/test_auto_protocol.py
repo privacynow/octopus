@@ -14,7 +14,11 @@ from octopus_sdk.protocols import (
     render_protocol_stage_prompt,
     revise_auto_protocol_session,
 )
-from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document, auto_protocol_event_summary
+from octopus_sdk.protocols.auto_design import (
+    ProtocolRunLessonRecord,
+    _validate_and_repair_protocol_document,
+    auto_protocol_event_summary,
+)
 from octopus_sdk.protocols.models import ProtocolRunMutationRecord
 
 
@@ -47,6 +51,38 @@ def _planner_response(*package_keys: str) -> ProtocolAutoDesignModelResponseReco
     )
 
 
+def test_auto_protocol_injects_run_lessons_as_contract_stage_clauses():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text="Build a browser-runnable API service with persistent state and a simple operator dashboard.",
+            model_response=_planner_response("domain_grounding", "api_design", "implementation"),
+            run_lessons=[
+                ProtocolRunLessonRecord(
+                    category="blocked",
+                    lesson_type="negative_case",
+                    summary="Rejected actions must not mutate user-owned state.",
+                    applies_when="the product has persistent user-owned state",
+                    contract_section="verification_contract",
+                    required_evidence=["negative_case", "persistence_invariant"],
+                    source_run_id="run-prior",
+                    source_failure="runtime_evidence_required",
+                )
+            ],
+        )
+    )
+    document = session.draft_definition_json.as_dict()
+    product_domain = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_product_domain_contract")
+    system_verification = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_system_verification_contract")
+
+    for stage in (product_domain, system_verification):
+        instructions = stage["instructions"]
+        assert "Inherited run lessons must become contract clauses" in instructions
+        assert "Rejected actions must not mutate user-owned state." in instructions
+        assert "Required evidence: negative_case, persistence_invariant." in instructions
+        assert "Contract section: verification_contract." in instructions
+
+
 def test_auto_protocol_generates_requirement_specific_protocol_without_template_classifier():
     session = generate_auto_protocol_session(
         ProtocolAutoDesignRequestRecord(
@@ -76,11 +112,18 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert session.analysis.domain == "requirement-specific"
     assert "experience design" in session.analysis.skills
     assert session.validation.ok is True
-    stage_names = [stage.display_name.lower() for stage in session.plan.stages]
-    assert any("coverage" in name for name in stage_names)
-    assert any("experience" in name for name in stage_names)
-    assert any("accept" in name for name in stage_names)
-    assert len(session.plan.stages) >= 8
+    assert session.plan.contract_required is True
+    assert session.plan.product_class
+    stage_keys = [stage.stage_key for stage in session.plan.stages]
+    assert stage_keys[:4] == [
+        "produce_product_domain_contract",
+        "review_product_domain_contract",
+        "produce_system_verification_contract",
+        "review_system_verification_contract",
+    ]
+    assert stage_keys[-2:] == ["produce_outcome", "final_evidence"]
+    assert "design_experience" in stage_keys
+    assert len(session.plan.stages) >= 6
     assert len(session.plan.stages) <= 18
     assert session.plan.primary_artifact.artifact_key == "produced_outcome"
     run_input_keys = [
@@ -97,6 +140,7 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "playable" in plan_text
     document = session.draft_definition_json.as_dict()
     produce_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_outcome")
+    assert int(produce_stage["timeout_seconds"]) == 0
     assert "only valid protocol decision is completed" in produce_stage["instructions"]
     assert "Do not leave foreground servers" in produce_stage["instructions"]
     assert "runtime_kind 'java'" in produce_stage["instructions"]
@@ -106,6 +150,24 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "developer server commands at launch" in produce_stage["instructions"]
     assert "must not run dependency installation" in produce_stage["instructions"]
     acceptance_stage = next(stage for stage in document["stages"] if stage["stage_key"] == "final_evidence")
+    assert int(acceptance_stage["timeout_seconds"]) == 0
+    definition = ProtocolDefinitionDocumentRecord.model_validate(document)
+    run = ProtocolRunRecord(
+        protocol_run_id="run-timeouts",
+        protocol_definition_version_id="version-timeouts",
+    )
+    assert protocol_stage_runtime_contract(
+        document=definition,
+        run=run,
+        stage_execution_id="produce-timeout",
+        stage=definition.stage("produce_outcome"),
+    ).timeout_seconds >= 14_400
+    assert protocol_stage_runtime_contract(
+        document=definition,
+        run=run,
+        stage_execution_id="accept-timeout",
+        stage=definition.stage("final_evidence"),
+    ).timeout_seconds >= 10_800
     assert acceptance_stage["transitions"]["revise"] == "produce_outcome"
     assert "Adversarially" in acceptance_stage["instructions"]
     assert "exercise" in acceptance_stage["instructions"]
@@ -118,22 +180,32 @@ def test_auto_protocol_generates_requirement_specific_protocol_without_template_
     assert "Octopus branding" in acceptance_stage["instructions"]
     assert "Registry-managed runtime" in acceptance_stage["instructions"]
     assert "choose revise" in acceptance_stage["instructions"].lower()
-    assert document["metadata"]["auto_protocol"]["primary_artifact"]["open_behavior"] == "runtime"
+    auto_protocol = document["metadata"]["auto_protocol"]
+    assert auto_protocol["contract_required"] is True
+    assert auto_protocol["product_class"]
+    assert auto_protocol["acceptance_contract"]["schema_version"] == 2
+    assert auto_protocol["acceptance_contract"]["contract_artifact_key"] == "auto_protocol_contract"
+    assert auto_protocol["acceptance_contract"]["contract_review_stage_key"] == "review_system_verification_contract"
+    assert auto_protocol["primary_artifact"]["open_behavior"] == "runtime"
     assert any(
         "root octopus-runtime.json" in item
-        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+        for item in auto_protocol["primary_artifact"]["evidence_requirements"]
     )
     assert any(
         "does not install, build, package, or test" in item
-        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+        for item in auto_protocol["primary_artifact"]["evidence_requirements"]
     )
     assert any(
         "outcome-readiness matrix" in item
-        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+        for item in auto_protocol["primary_artifact"]["evidence_requirements"]
     )
     assert any(
         "Octopus branding" in item
-        for item in document["metadata"]["auto_protocol"]["primary_artifact"]["evidence_requirements"]
+        for item in auto_protocol["primary_artifact"]["evidence_requirements"]
+    )
+    assert any(
+        "auto_protocol_contract" in item
+        for item in auto_protocol["primary_artifact"]["evidence_requirements"]
     )
     assert session.analysis.work_packages
     assert any(package.package_key == "implementation" for package in session.analysis.work_packages)
@@ -166,6 +238,65 @@ def test_auto_protocol_preserves_resource_refs_into_run_creation():
     assert session.event_summary.resource_count == 1
     assert request.resource_refs == ["res_source_zip"]
     assert request.constraints_json["resource_refs"] == ["res_source_zip"]
+
+
+def test_auto_protocol_keeps_lightweight_non_runtime_work_on_lightweight_path():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text="Write a concise markdown checklist for weekly team planning.",
+            available_agents=[
+                {
+                    "agent_id": "agent-1",
+                    "display_name": "General Builder",
+                    "routing_skills": ["writing"],
+                }
+            ],
+            model_response=_planner_response("implementation"),
+        )
+    )
+
+    document = session.draft_definition_json.as_dict()
+    auto_protocol = document["metadata"]["auto_protocol"]
+    stage_keys = [stage["stage_key"] for stage in document["stages"]]
+
+    assert session.status == "ready"
+    assert session.plan.contract_required is False
+    assert auto_protocol["contract_required"] is False
+    assert "acceptance_contract" not in auto_protocol
+    assert "produce_product_domain_contract" not in stage_keys
+    assert "review_system_verification_contract" not in stage_keys
+    assert {int(stage.get("timeout_seconds") or 0) for stage in document["stages"]} == {0}
+
+
+def test_auto_protocol_requires_v2_contract_for_external_stateful_products():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text=(
+                "Build an API service with a database, provider adapter, user accounts, "
+                "recommendations, and a browser dashboard for operators."
+            ),
+            available_agents=[{"agent_id": "agent-1", "display_name": "Builder"}],
+            model_response=_planner_response("implementation"),
+        )
+    )
+
+    document = session.draft_definition_json.as_dict()
+    auto_protocol = document["metadata"]["auto_protocol"]
+    stage_keys = [stage["stage_key"] for stage in document["stages"]]
+
+    assert session.status == "ready"
+    assert session.plan.contract_required is True
+    assert auto_protocol["acceptance_contract"]["schema_version"] == 2
+    assert auto_protocol["acceptance_contract"]["contract_artifact_key"] == "auto_protocol_contract"
+    assert stage_keys[:4] == [
+        "produce_product_domain_contract",
+        "review_product_domain_contract",
+        "produce_system_verification_contract",
+        "review_system_verification_contract",
+    ]
+    assert len(stage_keys) <= 18
 
 
 def test_auto_protocol_normalizes_and_surfaces_planner_warning_strings():
@@ -511,7 +642,9 @@ def test_auto_protocol_uses_distinct_reviewer_participants_for_review_domains():
         if stage.stage_kind == "review"
     ]
 
-    assert len(review_roles) >= 5
+    assert 3 <= len(review_roles) <= 5
+    assert "product_domain_contract_reviewer" in review_roles
+    assert "system_verification_contract_reviewer" in review_roles
     assert len(review_roles) == len(set(review_roles))
     assert not any(item.code == "semantic.review_context_not_isolated" for item in session.unresolved_decisions)
 
@@ -565,13 +698,14 @@ def test_auto_protocol_infers_reviews_without_user_prompting_review_stages():
     stage_keys = [stage.stage_key for stage in session.plan.stages]
     review_keys = [stage.stage_key for stage in session.plan.stages if stage.stage_kind == "review"]
 
-    assert "review_requirements" in stage_keys
+    assert "review_product_domain_contract" in stage_keys
+    assert "review_system_verification_contract" in stage_keys
     assert "review_experience" in stage_keys
     assert "review_outcome" not in stage_keys
     assert "review_verification" not in stage_keys
     assert stage_keys[-2] == "produce_outcome"
     assert stage_keys[-1] == "final_evidence"
-    assert len(review_keys) >= 4
+    assert len(review_keys) >= 3
     assert "review" not in session.requirement_text.lower()
 
 
@@ -674,7 +808,7 @@ def test_protocol_stage_prompts_materialize_run_scoped_artifact_paths():
         protocol_definition_version_id="version-1",
         problem_statement="Build a browser-runnable analytics dashboard.",
     )
-    stage = document.stage("plan_requirements")
+    stage = document.stage("produce_product_domain_contract")
 
     prompt = render_protocol_stage_prompt(document=document, run=run, stage=stage, artifacts=[])
     contract = protocol_stage_runtime_contract(
@@ -684,5 +818,5 @@ def test_protocol_stage_prompts_materialize_run_scoped_artifact_paths():
         stage=stage,
     )
 
-    assert "protocol/auto/run-abc/requirements-plan.md" in prompt
-    assert contract.output_artifacts[0].path == "protocol/auto/run-abc/requirements-plan.md"
+    assert "protocol/auto/run-abc/product-domain-contract.json" in prompt
+    assert contract.output_artifacts[0].path == "protocol/auto/run-abc/product-domain-contract.json"

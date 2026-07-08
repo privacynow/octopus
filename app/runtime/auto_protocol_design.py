@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import asyncio
 from typing import Any
 
 from octopus_sdk.config import BotConfigBase
@@ -32,6 +33,9 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "available_agents": agents,
         "available_skills": skills,
         "workspace_ref": request.workspace_ref,
+        "resource_refs": list(request.resource_refs or []),
+        "resource_summaries": [item.as_dict() for item in request.resource_summaries],
+        "run_lessons": [item.model_dump(mode="json") for item in request.run_lessons or []],
     }
     return (
         "You are designing an Octopus Auto Protocol plan. Return only valid JSON. "
@@ -52,6 +56,8 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         "{\n"
         '  "requirement_summary": "plain summary",\n'
         '  "domain": "requirement-specific domain label",\n'
+        '  "product_class": "lightweight_artifact|serious_product|api_service|backend_system|data_integration|dashboard|finance_tool|trading_tool|workflow_engine|external_integration|persistent_state_system",\n'
+        '  "contract_skeleton": {"contract_required": true, "product_contract": {"workflows": ["..."], "risks": ["..."]}, "domain_contract": {"risk_areas": ["..."]}, "system_contract": {"api_or_state_areas": ["..."]}, "verification_contract": {"required_evidence_kinds": ["api_probe", "db_invariant", "browser_journey"]}},\n'
         '  "risk_assessment": "important risks or empty",\n'
         '  "assumptions": ["..."],\n'
         '  "open_questions": [],\n'
@@ -83,6 +89,9 @@ def _planner_prompt(request: ProtocolAutoDesignModelRequestRecord) -> str:
         '  "planner_ref": "provider-semantic-planner"\n'
         "}\n\n"
         "Warnings must be objects with code, message, severity, section, and action. Use an empty list when there are no warnings.\n\n"
+        "Contract guidance: for serious products, API/backend systems, persistent state, external providers, trading/finance, safety-sensitive, or runtime UI/API outcomes, "
+        "set product_class accordingly and provide a contract_skeleton. The skeleton names workflows, risk areas, APIs/state/provider areas, and evidence kinds only; "
+        "do not pretend the full product/system contract is complete in the planner response. The compiled protocol will produce and review the authoritative contract as run artifacts.\n\n"
         "Required package guidance: include requirement/planning work, requirement review will be added by the compiler, "
         "include focused supporting packages that are truly needed, and include one implementation/outcome package. "
         "For the outcome package use package_key 'implementation' if you include it; otherwise the compiler will create it. "
@@ -118,12 +127,15 @@ async def design_auto_protocol_with_provider(
     config: BotConfigBase,
     provider: Provider,
     provider_state_factory,
+    progress=None,
+    cancel: asyncio.Event | None = None,
 ) -> ProtocolAutoDesignModelResponseRecord:
     del provider_state_factory
+    progress_sink = progress or _NullProgress()
     result = await provider.run_preflight(
         _planner_prompt(request),
         [],
-        _NullProgress(),
+        progress_sink,
         context=PreflightContext(
             extra_dirs=[],
             system_prompt=(
@@ -134,7 +146,9 @@ async def design_auto_protocol_with_provider(
             working_dir=str(getattr(config, "working_dir", "") or ""),
             file_policy="inspect",
             effective_model=str(getattr(config, "model", "") or ""),
+            timeout_seconds=max(300, int(getattr(config, "timeout_seconds", 0) or 0)),
         ),
+        cancel=cancel,
     )
     if result.returncode != 0 or result.timed_out or result.cancelled:
         detail = result.text.strip() or f"provider exited with code {result.returncode}"

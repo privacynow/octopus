@@ -25,12 +25,38 @@ from octopus_sdk.authorization import AuthorizationPort
 from octopus_sdk.bot_runtime import ExecutionServices, SessionRuntimePort, WorkflowComposition
 from octopus_sdk.conversation_projection import ConversationProjectionPort
 from octopus_sdk.health_publication import HealthPublicationPort
+from octopus_sdk.registry.client import RegistryClient
 from octopus_sdk.registry_inspection import RegistryInspectionPort
 from octopus_sdk.registry_participant import RegistryParticipantImplementation
 from octopus_sdk.task_routing import TaskRoutingPort
 from octopus_sdk.work_queue import WorkQueuePort
 
 log = logging.getLogger(__name__)
+
+
+class RuntimeCapabilityExchangeService:
+    def __init__(self, config: BotConfig) -> None:
+        self._config = config
+
+    async def exchange_runtime_capability(self, *, authority_ref: str, capability_ref: str) -> str:
+        try:
+            registry_id = registry_id_from_implementation_ref(authority_ref)
+        except ValueError:
+            return ""
+        registry = next((item for item in self._config.agent_registries if item.registry_id == registry_id), None)
+        if registry is None:
+            return ""
+        state = load_runtime_registry_connection_state(
+            self._config.data_dir,
+            registry_id,
+            registry_scope=registry.registry_scope,
+        )
+        if not state.agent_token:
+            return ""
+        result = await RegistryClient(registry.url, agent_token=state.agent_token).exchange_runtime_capability(capability_ref)
+        if not bool(result.get("ok", False)):
+            return ""
+        return str(result.get("bearer_token", "") or "")
 
 
 @dataclass(frozen=True)
@@ -144,6 +170,7 @@ def build_bus_bot_services(
             config=config,
             runtime_skill_catalog=workflow_graph.runtime_skills.catalog,
         ),
+        runtime_capabilities=RuntimeCapabilityExchangeService(config),
     )
     return BotServices(
         control_plane=control_plane,

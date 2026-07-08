@@ -20,7 +20,6 @@ from octopus_sdk.content_models import (
 from octopus_sdk.protocols import (
     ProtocolAuthoringOptionsRecord,
     ProtocolAccessContextRecord,
-    ProtocolAutoDesignRequestRecord,
     ProtocolAutoDesignSessionRecord,
     ProtocolArtifactRecord,
     ProtocolArtifactRuntimeEventRecord,
@@ -36,9 +35,13 @@ from octopus_sdk.protocols import (
     ProtocolRunCreateRecord,
     ProtocolRunDetailRecord,
     ProtocolRunExportRecord,
+    ProtocolRunForkRequestRecord,
+    ProtocolRunForkResultRecord,
     ProtocolRunMutationRecord,
     ProtocolRunParticipantRecord,
     ProtocolRunRecord,
+    ProtocolRuntimeCapabilityExchangeResultRecord,
+    ProtocolRuntimeCapabilityTokenRecord,
     ProtocolScenarioRecord,
     ProtocolTemplateSummaryRecord,
     ProtocolTextDocumentRecord,
@@ -46,7 +49,7 @@ from octopus_sdk.protocols import (
 )
 from octopus_sdk.protocols.engine import DEFAULT_PROTOCOL_RUN_ENGINE, ProtocolRunEngine
 from octopus_sdk.resources import ResourceAttachmentRecord, ResourceRecord
-from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, write_tx
+from .postgres_store_support import POSTGRES_STORE_DIALECT, SCHEMA, cur, jsonb, run_write_tx_with_retry, write_tx
 from .protocol_store import ProtocolPostgresAdapter
 from .routing_skill_service import (
     requested_routed_skills,
@@ -565,12 +568,19 @@ class RegistryPostgresStore(AbstractRegistryStore):
             or routed_task_external_conversation_ref(validated_request.routed_task_id)
         )
         task_context = request_payload.get("context", {})
-        task_source_kind = (
+        explicit_source_kind = ""
+        if isinstance(task_context, dict):
+            explicit_source_kind = str(
+                task_context.get("task_source_kind")
+                or task_context.get("source_kind")
+                or ""
+            ).strip()
+        task_source_kind = explicit_source_kind or (
             "protocol_stage"
             if isinstance(task_context, dict) and str(task_context.get("protocol_run_id", "") or "").strip()
             else "delegation"
         )
-        task_hidden = task_source_kind in {"protocol_stage", "rehearsal", "test"}
+        task_hidden = task_source_kind in {"protocol_stage", "rehearsal", "test", "auto_design"}
         for skill_name in requested_routed_skills(request_payload):
             if skill_name.lower() in disabled_skills:
                 raise RoutingSkillDisabledError(skill_name)
@@ -749,6 +759,23 @@ class RegistryPostgresStore(AbstractRegistryStore):
                     routed_task_id=routed_task_id,
                     now=now,
                 )
+            try:
+                task = shared_get_task(
+                    conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    routed_task_id=routed_task_id,
+                )
+                if str(getattr(task, "source_kind", "") or "") == "auto_design":
+                    self._protocol_store.update_auto_design_task_progress_in_tx(
+                        conn,
+                        routed_task_id=routed_task_id,
+                        status=status_value,
+                        summary=str(getattr(payload, "summary", "") or ""),
+                        progress=getattr(payload, "progress", None),
+                        now=now,
+                    )
+            except Exception:
+                log.warning("Auto Protocol planner progress sync failed for task %s", routed_task_id, exc_info=True)
             return result
 
     def update_routed_task_result(
@@ -758,7 +785,7 @@ class RegistryPostgresStore(AbstractRegistryStore):
         payload: RegistryRecordModel,
     ) -> TaskRecord:
         now = utcnow_iso()
-        with self._connect() as conn, _write_tx(conn):
+        def _operation(conn):
             result = shared_update_routed_task_result(
                 conn,
                 dialect=_POSTGRES_STORE_DIALECT,
@@ -779,7 +806,24 @@ class RegistryPostgresStore(AbstractRegistryStore):
                 routed_task_id=routed_task_id,
                 now=now,
             )
+            try:
+                task = shared_get_task(
+                    conn,
+                    dialect=_POSTGRES_STORE_DIALECT,
+                    routed_task_id=routed_task_id,
+                )
+                if str(getattr(task, "source_kind", "") or "") == "auto_design":
+                    result_payload = task.result.as_dict() if task.result is not None else {}
+                    self._protocol_store.finalize_auto_design_task_result_in_tx(
+                        conn,
+                        routed_task_id=routed_task_id,
+                        result_json=result_payload,
+                        now=now,
+                    )
+            except Exception:
+                log.warning("Auto Protocol planner result sync failed for task %s", routed_task_id, exc_info=True)
             return result
+        return run_write_tx_with_retry(self._connect, _operation)
 
     def report_management_result(
         self,
@@ -1310,14 +1354,6 @@ class RegistryPostgresStore(AbstractRegistryStore):
             format=format,
         )
 
-    def create_protocol_auto_design_session(
-        self,
-        payload: ProtocolAutoDesignRequestRecord,
-        *,
-        access: ProtocolAccessContextRecord,
-    ) -> ProtocolAutoDesignSessionRecord:
-        return self._protocol_store.create_protocol_auto_design_session(payload, access=access)
-
     def get_protocol_auto_design_session(
         self,
         session_id: str,
@@ -1325,6 +1361,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
         access: ProtocolAccessContextRecord,
     ) -> ProtocolAutoDesignSessionRecord:
         return self._protocol_store.get_protocol_auto_design_session(session_id, access=access)
+
+    def list_protocol_auto_design_sessions(
+        self,
+        *,
+        access: ProtocolAccessContextRecord,
+        cursor: int = 0,
+        limit: int = 25,
+        status: str = "",
+    ) -> list[ProtocolAutoDesignSessionRecord]:
+        return self._protocol_store.list_protocol_auto_design_sessions(
+            access=access,
+            cursor=cursor,
+            limit=limit,
+            status=status,
+        )
 
     def update_protocol_auto_design_session(
         self,
@@ -1460,6 +1511,21 @@ class RegistryPostgresStore(AbstractRegistryStore):
             idempotency_key=idempotency_key,
         )
 
+    def fork_protocol_run_from_stage(
+        self,
+        run_id: str,
+        payload: ProtocolRunForkRequestRecord,
+        *,
+        access: ProtocolAccessContextRecord,
+        idempotency_key: str = "",
+    ) -> ProtocolRunForkResultRecord:
+        return self._protocol_store.fork_protocol_run_from_stage(
+            run_id,
+            payload,
+            access=access,
+            idempotency_key=idempotency_key,
+        )
+
     def get_protocol_run(self, run_id: str, *, access: ProtocolAccessContextRecord) -> ProtocolRunDetailRecord:
         return self._protocol_store.get_protocol_run(run_id, access=access)
 
@@ -1545,12 +1611,69 @@ class RegistryPostgresStore(AbstractRegistryStore):
         *,
         access: ProtocolAccessContextRecord,
         limit: int = 50,
+        event_kind: str | None = None,
     ) -> list[ProtocolArtifactRuntimeEventRecord]:
         return self._protocol_store.list_protocol_artifact_runtime_events(
             run_id,
             artifact_key,
             access=access,
             limit=limit,
+            event_kind=event_kind,
+        )
+
+    def mint_runtime_capability_token(
+        self,
+        *,
+        protocol_run_id: str,
+        protocol_stage_execution_id: str,
+        artifact_key: str,
+        participant_key: str,
+        target_agent_id: str,
+        allowed_actions: list[str] | tuple[str, ...],
+        expires_at: str,
+        actor_ref: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord:
+        return self._protocol_store.mint_runtime_capability_token(
+            protocol_run_id=protocol_run_id,
+            protocol_stage_execution_id=protocol_stage_execution_id,
+            artifact_key=artifact_key,
+            participant_key=participant_key,
+            target_agent_id=target_agent_id,
+            allowed_actions=allowed_actions,
+            expires_at=expires_at,
+            actor_ref=actor_ref,
+        )
+
+    def exchange_runtime_capability_token(
+        self,
+        *,
+        capability_ref: str,
+        target_agent_id: str,
+    ) -> ProtocolRuntimeCapabilityExchangeResultRecord:
+        return self._protocol_store.exchange_runtime_capability_token(
+            capability_ref=capability_ref,
+            target_agent_id=target_agent_id,
+        )
+
+    def validate_runtime_capability_token(
+        self,
+        *,
+        bearer_token: str,
+        protocol_run_id: str,
+        artifact_key: str,
+        action: str,
+    ) -> ProtocolRuntimeCapabilityTokenRecord | None:
+        return self._protocol_store.validate_runtime_capability_token(
+            bearer_token=bearer_token,
+            protocol_run_id=protocol_run_id,
+            artifact_key=artifact_key,
+            action=action,
+        )
+
+    def revoke_runtime_capability_tokens_for_stage(self, protocol_stage_execution_id: str, *, reason: str = "") -> int:
+        return self._protocol_store.revoke_runtime_capability_tokens_for_stage(
+            protocol_stage_execution_id,
+            reason=reason,
         )
 
     def export_protocol_run(

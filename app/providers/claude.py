@@ -556,8 +556,13 @@ class ClaudeProvider:
                 "resume" if is_resume else "fresh",
                 str(provider_state.get("session_id", "") or ""),
             )
+            timeout_seconds = int(getattr(context, "timeout_seconds", 0) or 0) if context else 0
             accumulated, result_data, rc, stderr, tool_executions = await self._run_process(
-                cmd, progress, extra_env=extra_env, working_dir=working_dir,
+                cmd,
+                progress,
+                timeout=timeout_seconds if timeout_seconds > 0 else None,
+                extra_env=extra_env,
+                working_dir=working_dir,
                 cancel=cancel,
             )
         finally:
@@ -655,8 +660,12 @@ class ClaudeProvider:
 
         working_dir = context.working_dir if context else ""
         effective_working_dir = working_dir or str(self.config.working_dir)
+        timeout_seconds = int(getattr(context, "timeout_seconds", 0) or 0) if context else 0
         accumulated, result_data, rc, _stderr, _tool_executions = await self._run_process(
-            cmd, progress, timeout=120, working_dir=working_dir,
+            cmd,
+            progress,
+            timeout=timeout_seconds if timeout_seconds > 0 else 120,
+            working_dir=working_dir,
             cancel=cancel,
         )
 

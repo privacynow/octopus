@@ -18,6 +18,8 @@ from octopus_sdk.protocols.models import (
     ProtocolArtifactRuntimeHealthRecord,
     ProtocolArtifactRuntimeInstanceRecord,
     ProtocolArtifactRuntimeManifestRecord,
+    ProtocolRuntimeJourneyResultRecord,
+    ProtocolRuntimeJourneySpecRecord,
 )
 from octopus_sdk.registry.models import ExecutionStateRecord, RegistryJsonRecord, RegistryRecordModel, utcnow_iso
 from octopus_sdk.skill_types import SkillRequirement
@@ -86,6 +88,8 @@ ManagementOperation = Literal[
     "artifact_runtime_health",
     "artifact_runtime_logs",
     "artifact_runtime_fetch",
+    "run_artifact_journey",
+    "cancel_routed_task",
     "workspace_usage",
     "workspace_cleanup",
 ]
@@ -130,6 +134,8 @@ ALL_MANAGEMENT_OPERATIONS: tuple[ManagementOperation, ...] = (
     "artifact_runtime_health",
     "artifact_runtime_logs",
     "artifact_runtime_fetch",
+    "run_artifact_journey",
+    "cancel_routed_task",
     "workspace_usage",
     "workspace_cleanup",
 )
@@ -1128,6 +1134,26 @@ class ArtifactRuntimeFetchRequest(RegistryRecordModel):
     body_base64: str = ""
 
 
+class RunArtifactJourneyRequest(RegistryRecordModel):
+    operation: Literal["run_artifact_journey"] = "run_artifact_journey"
+    runtime_instance_id: str
+    protocol_run_id: str
+    artifact_key: str
+    journey_key: str
+    journey_run_id: str
+    registry_url: str
+    capability_ref: str
+    spec: ProtocolRuntimeJourneySpecRecord
+
+
+class CancelRoutedTaskRequest(RegistryRecordModel):
+    operation: Literal["cancel_routed_task"] = "cancel_routed_task"
+    routed_task_id: str
+    protocol_run_id: str = ""
+    protocol_stage_execution_id: str = ""
+    reason: str = ""
+
+
 class WorkspaceCleanupEntryRecord(RegistryRecordModel):
     path: str = ""
     category: str = "unknown"
@@ -1211,6 +1237,8 @@ ManagementRequestPayload = Annotated[
     | ArtifactRuntimeHealthRequest
     | ArtifactRuntimeLogsRequest
     | ArtifactRuntimeFetchRequest
+    | RunArtifactJourneyRequest
+    | CancelRoutedTaskRequest
     | WorkspaceUsageRequest
     | WorkspaceCleanupRequest,
     Field(discriminator="operation"),
@@ -1421,6 +1449,19 @@ class ArtifactRuntimeFetchResult(RegistryRecordModel):
     body_base64: str = ""
 
 
+class RunArtifactJourneyResult(RegistryRecordModel):
+    operation: Literal["run_artifact_journey"] = "run_artifact_journey"
+    result: ProtocolRuntimeJourneyResultRecord
+
+
+class CancelRoutedTaskResult(RegistryRecordModel):
+    operation: Literal["cancel_routed_task"] = "cancel_routed_task"
+    routed_task_id: str
+    requested: bool = False
+    status: str = ""
+    message: str = ""
+
+
 class WorkspaceUsageResult(RegistryRecordModel):
     operation: Literal["workspace_usage"] = "workspace_usage"
     plan: WorkspaceCleanupPlanRecord
@@ -1474,6 +1515,8 @@ ManagementResultPayload = Annotated[
     | ArtifactRuntimeHealthResult
     | ArtifactRuntimeLogsResult
     | ArtifactRuntimeFetchResult
+    | RunArtifactJourneyResult
+    | CancelRoutedTaskResult
     | WorkspaceUsageResult
     | WorkspaceCleanupResult,
     Field(discriminator="operation"),

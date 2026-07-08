@@ -229,12 +229,162 @@ async function mockAutoProtocolSessions(page, options = {}) {
   });
 }
 
+async function mockProtocolCatalog(page, { records = [] } = {}) {
+  await page.route('**/v1/protocols**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === '/v1/protocols') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(records),
+      });
+      return;
+    }
+    const parts = url.pathname.split('/').filter(Boolean);
+    const protocolId = decodeURIComponent(parts[parts.indexOf('protocols') + 1] || '');
+    const record = records.find((item) => String(item.protocol_id || '') === protocolId);
+    if (!record) {
+      await route.fulfill({
+        status: 404,
+        contentType: 'application/json',
+        body: JSON.stringify({ detail: { message: 'Not found', error_code: 'NOT_FOUND' } }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        protocol: record,
+        draft_definition_json: {
+          metadata: {
+            slug: record.slug,
+            display_name: record.display_name,
+            description: record.description,
+          },
+          participants: [],
+          artifacts: [],
+          stages: [],
+          policies: {},
+        },
+        versions: [],
+        validation: { ok: true },
+      }),
+    });
+  });
+  await page.route('**/v1/protocol-auto/sessions**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ items: [], next_cursor: null }),
+    });
+  });
+  await page.route('**/v1/protocol-authoring/options', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({}),
+    });
+  });
+  await page.route('**/v1/protocol-templates', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify([]),
+    });
+  });
+}
+
 function visibleReadySessions() {
   return [
     mockSession(1, { session_id: 'session-01', requirement_text: 'Ready design one', target_protocol_id: 'protocol-01' }),
     mockSession(2, { session_id: 'session-02', requirement_text: 'Ready design two', target_protocol_id: 'protocol-02' }),
   ];
 }
+
+test('protocol catalog cards clamp long descriptions without overlap', async ({ page }) => {
+  await login(page);
+  const longDescription = [
+    'This generated protocol description is intentionally enormous.',
+    'It includes a full pasted specification, repeated invariant clauses, provider caveats, API notes, persistence warnings, and user workflow details.',
+    'LongUnbrokenIdentifierThatUsedToBleedAcrossCatalogColumnsAndCoverNeighboringCards'.repeat(12),
+    ' '.repeat(1),
+    'Every catalog card must remain a bounded summary while the full description stays available in the detail view.',
+  ].join(' ');
+  await mockProtocolCatalog(page, {
+    records: [
+      {
+        protocol_id: 'proto-alpha',
+        slug: 'long-description-alpha',
+        display_name: 'Long Generated Protocol',
+        description: longDescription.repeat(6),
+        lifecycle_state: 'draft',
+        updated_at: '2026-07-07T12:00:00Z',
+      },
+      {
+        protocol_id: 'proto-beta',
+        slug: 'neighbor-beta',
+        display_name: 'Readable Neighbor Protocol',
+        description: 'Neighbor card should remain readable and clickable.',
+        lifecycle_state: 'published',
+        current_version_id: 'version-beta',
+        updated_at: '2026-07-07T12:01:00Z',
+      },
+      {
+        protocol_id: 'proto-gamma',
+        slug: 'neighbor-gamma',
+        display_name: 'Second Neighbor Protocol',
+        description: 'Another adjacent card that must not be covered.',
+        lifecycle_state: 'published',
+        current_version_id: 'version-gamma',
+        updated_at: '2026-07-07T12:02:00Z',
+      },
+    ],
+  });
+  const capture = attachErrorCapture(page);
+
+  await page.goto('/ui/protocols', { waitUntil: 'domcontentloaded' });
+  const cards = page.locator('.kit-authored-catalog .kit-catalog-card');
+  await expect(cards).toHaveCount(3);
+  await expect(cards.filter({ hasText: 'Readable Neighbor Protocol' })).toBeVisible();
+  await cards.filter({ hasText: 'Readable Neighbor Protocol' }).click();
+  await expect(page).toHaveURL(/protocol_id=proto-beta/);
+  await page.goBack({ waitUntil: 'domcontentloaded' });
+  await expect(cards).toHaveCount(3);
+
+  const layout = await cards.evaluateAll((nodes) => nodes.map((node) => {
+    const rect = node.getBoundingClientRect();
+    const body = node.querySelector('.kit-catalog-card-body');
+    const bodyRect = body ? body.getBoundingClientRect() : null;
+    return {
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height,
+      bodyHeight: bodyRect ? bodyRect.height : 0,
+    };
+  }));
+  expect(layout.length).toBe(3);
+  for (let i = 0; i < layout.length; i += 1) {
+    expect(layout[i].width).toBeGreaterThan(240);
+    expect(layout[i].height).toBeLessThan(260);
+    expect(layout[i].bodyHeight).toBeLessThan(105);
+    for (let j = i + 1; j < layout.length; j += 1) {
+      const a = layout[i];
+      const b = layout[j];
+      const separated = a.right <= b.left + 1
+        || b.right <= a.left + 1
+        || a.bottom <= b.top + 1
+        || b.bottom <= a.top + 1;
+      expect(separated).toBeTruthy();
+    }
+  }
+
+  expect(capture.pageErrors).toEqual([]);
+  expect(capture.consoleErrors).toEqual([]);
+});
 
 test('improve-run dialog opens and unavailable actions are not actionable', async ({ page }) => {
   await login(page);

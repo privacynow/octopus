@@ -1475,7 +1475,7 @@ class ProtocolPostgresAdapter:
         metadata: Mapping[str, object],
         manifest: ProtocolArtifactRuntimeManifestRecord | None,
     ) -> bool:
-        return bool(RegistryPostgresStore._runtime_fetch_core_exercise_key(metadata, manifest))
+        return bool(ProtocolPostgresAdapter._runtime_fetch_core_exercise_key(metadata, manifest))
 
     @staticmethod
     def _runtime_fetch_core_exercise_key(
@@ -1808,6 +1808,120 @@ class ProtocolPostgresAdapter:
         return journeys
 
     @staticmethod
+    def _normalize_evidence_trust_tier(value: object, *, default: str = "tier_2") -> str:
+        text = str(value or default).strip().lower().replace(" ", "_").replace("-", "_")
+        if text in {"1", "tier1"}:
+            return "tier_1"
+        if text in {"2", "tier2"}:
+            return "tier_2"
+        if text in {"3", "tier3"}:
+            return "tier_3"
+        return text or default
+
+    @staticmethod
+    def _evidence_kind_default_tier(kind: str) -> str:
+        normalized = str(kind or "").strip().lower()
+        if normalized in {"runtime_start", "runtime_health", "browser_journey", "api_probe", "artifact_snapshot"}:
+            return "tier_1"
+        if normalized in {"domain_source", "source_quality", "provider_live_note", "residual_risk"}:
+            return "tier_3"
+        return "tier_2"
+
+    @staticmethod
+    def _tier_1_machine_evidence_kinds() -> set[str]:
+        return {"runtime_start", "runtime_health", "browser_journey", "api_probe", "artifact_snapshot"}
+
+    @staticmethod
+    def _evidence_category(kind: str, requirement_id: str = "") -> str:
+        text = " ".join([str(kind or ""), str(requirement_id or "")]).lower()
+        if any(token in text for token in ("domain", "product", "source", "operator_decision")):
+            return "product/domain"
+        if any(token in text for token in ("api", "endpoint", "http", "route")):
+            return "backend/API"
+        if any(token in text for token in ("db", "database", "state", "persistence", "regression_seed")):
+            return "state/persistence"
+        if any(token in text for token in ("provider", "callout", "external", "live_status")):
+            return "provider/data"
+        if any(token in text for token in ("security", "auth", "secret")):
+            return "security"
+        if any(token in text for token in ("browser", "journey", "ui", "workflow")):
+            return "UI/workflow"
+        if "doc" in text:
+            return "docs"
+        return "verification"
+
+    @classmethod
+    def _evidence_status_item(
+        cls,
+        *,
+        category: str = "",
+        requirement_id: str = "",
+        evidence_id: str = "",
+        kind: str = "",
+        trust_tier: str = "",
+        status: str = "missing",
+        reason_code: str = "",
+        reason_detail: str = "",
+        expected_source_stage_key: str = "",
+        actual_source_stage_execution_id: str = "",
+        artifact_content_hash: str = "",
+        corroboration_refs: Sequence[object] | None = None,
+    ) -> dict[str, object]:
+        normalized_kind = str(kind or "").strip()
+        normalized_requirement = str(requirement_id or "").strip()
+        return {
+            "category": category or cls._evidence_category(normalized_kind, normalized_requirement),
+            "requirement_id": normalized_requirement,
+            "evidence_id": str(evidence_id or "").strip(),
+            "kind": normalized_kind,
+            "trust_tier": cls._normalize_evidence_trust_tier(trust_tier, default=cls._evidence_kind_default_tier(normalized_kind)),
+            "status": str(status or "missing").strip() or "missing",
+            "reason_code": str(reason_code or "").strip(),
+            "reason_detail": str(reason_detail or "").strip(),
+            "expected_source_stage_key": str(expected_source_stage_key or "").strip(),
+            "actual_source_stage_execution_id": str(actual_source_stage_execution_id or "").strip(),
+            "artifact_content_hash": str(artifact_content_hash or "").strip(),
+            "corroboration_refs": [str(item or "").strip() for item in (corroboration_refs or []) if str(item or "").strip()],
+        }
+
+    @staticmethod
+    def _unresolved_operator_decisions(contract_document: Mapping[str, object]) -> list[str]:
+        candidates: list[object] = []
+        top_level = contract_document.get("operator_decisions_required")
+        if isinstance(top_level, Sequence) and not isinstance(top_level, (str, bytes)):
+            candidates.extend(top_level)
+        domain_contract = contract_document.get("domain_contract")
+        if isinstance(domain_contract, Mapping):
+            domain_level = domain_contract.get("operator_decisions_required")
+            if isinstance(domain_level, Sequence) and not isinstance(domain_level, (str, bytes)):
+                candidates.extend(domain_level)
+        unresolved: list[str] = []
+        for index, item in enumerate(candidates, start=1):
+            if isinstance(item, Mapping):
+                if item.get("required") is False or item.get("blocking") is False or item.get("non_blocking") is True:
+                    continue
+                status = str(item.get("status", "") or "").strip().lower()
+                if status in {"resolved", "answered", "accepted", "not_required", "non_blocking"}:
+                    continue
+                if item.get("resolved") is True:
+                    continue
+                if str(item.get("answer", "") or item.get("decision", "") or item.get("value", "") or "").strip():
+                    continue
+                label = str(
+                    item.get("decision_id", "")
+                    or item.get("requirement_id", "")
+                    or item.get("question", "")
+                    or item.get("summary", "")
+                    or f"operator_decision_{index}"
+                ).strip()
+                unresolved.append(label)
+                continue
+            label = str(item or "").strip()
+            if label:
+                unresolved.append(label)
+        return list(dict.fromkeys(unresolved))
+
+    @staticmethod
     def _manifest_evidence_items(manifest: Mapping[str, object] | None) -> list[dict[str, object]]:
         if not isinstance(manifest, Mapping):
             return []
@@ -1854,14 +1968,10 @@ class ProtocolPostgresAdapter:
                 continue
             item["evidence_id"] = evidence_id
             item["kind"] = kind
-            tier = str(item.get("trust_tier", "") or "").strip().lower().replace(" ", "_").replace("-", "_")
-            if tier in {"1", "tier1"}:
-                tier = "tier_1"
-            elif tier in {"2", "tier2"}:
-                tier = "tier_2"
-            elif tier in {"3", "tier3"}:
-                tier = "tier_3"
-            item["trust_tier"] = tier or "tier_2"
+            item["trust_tier"] = ProtocolPostgresAdapter._normalize_evidence_trust_tier(
+                item.get("trust_tier", ""),
+                default=ProtocolPostgresAdapter._evidence_kind_default_tier(kind),
+            )
             required.append(item)
         return required
 
@@ -1991,35 +2101,212 @@ class ProtocolPostgresAdapter:
         contract_key = str(contract.get("contract_artifact_key", "") or "").strip() or "auto_protocol_contract"
         contract_producer_stage_key = str(contract.get("contract_producer_stage_key", "") or "").strip() or "produce_system_verification_contract"
         contract_review_stage_key = str(contract.get("contract_review_stage_key", "") or "").strip() or "review_system_verification_contract"
+        product_domain_key = str(contract.get("product_domain_contract_artifact_key", "") or "").strip() or "product_domain_contract"
+        product_domain_producer_stage_key = str(contract.get("product_domain_contract_producer_stage_key", "") or "").strip() or "produce_product_domain_contract"
+        product_domain_review_stage_key = str(contract.get("product_domain_contract_review_stage_key", "") or "").strip() or "review_product_domain_contract"
         producer_manifest_key = str(contract.get("producer_manifest_artifact_key", "") or "").strip() or "producer_evidence_manifest"
         reviewer_manifest_key = str(contract.get("reviewer_manifest_artifact_key", "") or "").strip() or "reviewer_evidence_manifest"
         current_stage_execution_id = str(stage_execution_row.get("protocol_stage_execution_id", "") or "").strip()
         current_runtime_instance_id = self._current_runtime_instance_id(detail, primary_key)
         current_artifact_hash = self._current_artifact_content_hash(detail, primary_key)
+        missing: list[str] = []
+        evidence_status: list[dict[str, object]] = []
 
+        def add_missing(
+            label: str,
+            *,
+            category: str = "",
+            requirement_id: str = "",
+            evidence_id: str = "",
+            kind: str = "",
+            trust_tier: str = "",
+            reason_code: str = "",
+            reason_detail: str = "",
+            expected_source_stage_key: str = "",
+            actual_source_stage_execution_id: str = "",
+            artifact_content_hash: str = "",
+            corroboration_refs: Sequence[object] | None = None,
+        ) -> None:
+            text = str(label or "").strip()
+            if text:
+                missing.append(text)
+            evidence_status.append(self._evidence_status_item(
+                category=category,
+                requirement_id=requirement_id,
+                evidence_id=evidence_id,
+                kind=kind,
+                trust_tier=trust_tier,
+                status="missing",
+                reason_code=reason_code,
+                reason_detail=reason_detail or text,
+                expected_source_stage_key=expected_source_stage_key,
+                actual_source_stage_execution_id=actual_source_stage_execution_id,
+                artifact_content_hash=artifact_content_hash,
+                corroboration_refs=corroboration_refs,
+            ))
+
+        product_domain_producer = self._latest_stage_execution_for_key(detail, product_domain_producer_stage_key)
+        product_domain_review = self._latest_stage_execution_for_key(detail, product_domain_review_stage_key)
+        product_domain_snapshot = self._artifact_snapshot_json_detail_for_key(detail, product_domain_key)
         contract_producer = self._latest_stage_execution_for_key(detail, contract_producer_stage_key)
         contract_review = self._latest_stage_execution_for_key(detail, contract_review_stage_key)
         contract_snapshot = self._artifact_snapshot_json_detail_for_key(detail, contract_key)
         producer_manifest_snapshot = self._artifact_snapshot_json_detail_for_key(detail, producer_manifest_key)
         reviewer_manifest_snapshot = self._artifact_snapshot_json_detail_for_key(detail, reviewer_manifest_key)
-        missing: list[str] = []
 
         if contract_producer is None:
-            missing.append(f"contract producer stage: {contract_producer_stage_key}")
+            add_missing(
+                f"contract producer stage: {contract_producer_stage_key}",
+                category="product/domain",
+                evidence_id="auto_protocol_contract",
+                kind="artifact_snapshot",
+                reason_code="contract_producer_stage_missing",
+                expected_source_stage_key=contract_producer_stage_key,
+            )
         if contract_review is None or str(contract_review.status or "").strip().lower() != "completed":
-            missing.append(f"completed contract review stage: {contract_review_stage_key}")
+            add_missing(
+                f"completed contract review stage: {contract_review_stage_key}",
+                category="product/domain",
+                evidence_id="auto_protocol_contract_review",
+                kind="artifact_snapshot",
+                reason_code="contract_review_stage_incomplete",
+                expected_source_stage_key=contract_review_stage_key,
+            )
+        product_domain_document: dict[str, object] | None = None
+        product_domain_snapshot_record = None
+        if product_domain_producer is None:
+            add_missing(
+                f"product/domain contract producer stage: {product_domain_producer_stage_key}",
+                category="product/domain",
+                evidence_id=product_domain_key,
+                kind="artifact_snapshot",
+                reason_code="product_domain_contract_producer_stage_missing",
+                expected_source_stage_key=product_domain_producer_stage_key,
+            )
+        if product_domain_review is None or str(product_domain_review.status or "").strip().lower() != "completed":
+            add_missing(
+                f"completed product/domain contract review stage: {product_domain_review_stage_key}",
+                category="product/domain",
+                evidence_id=f"{product_domain_key}_review",
+                kind="artifact_snapshot",
+                reason_code="product_domain_contract_review_stage_incomplete",
+                expected_source_stage_key=product_domain_review_stage_key,
+            )
+        if product_domain_snapshot is None:
+            add_missing(
+                f"latest {product_domain_key} artifact snapshot",
+                category="product/domain",
+                evidence_id=product_domain_key,
+                kind="artifact_snapshot",
+                reason_code="product_domain_contract_snapshot_missing",
+                expected_source_stage_key=product_domain_producer_stage_key,
+            )
+        else:
+            product_domain_document, product_domain_snapshot_record = product_domain_snapshot
+            expected_product_domain_stage_id = str(getattr(product_domain_producer, "protocol_stage_execution_id", "") or "").strip()
+            actual_product_domain_stage_id = str(product_domain_snapshot_record.produced_by_stage_execution_id or "").strip()
+            if expected_product_domain_stage_id and actual_product_domain_stage_id != expected_product_domain_stage_id:
+                add_missing(
+                    f"{product_domain_key} snapshot from expected stage {product_domain_producer_stage_key}",
+                    category="product/domain",
+                    evidence_id=product_domain_key,
+                    kind="artifact_snapshot",
+                    reason_code="product_domain_contract_wrong_stage",
+                    expected_source_stage_key=product_domain_producer_stage_key,
+                    actual_source_stage_execution_id=actual_product_domain_stage_id,
+                    artifact_content_hash=str(product_domain_snapshot_record.content_hash or ""),
+                )
+            for section in ("product_contract", "domain_contract"):
+                value = product_domain_document.get(section)
+                if not isinstance(value, Mapping) or not value:
+                    add_missing(
+                        f"{product_domain_key}.{section}",
+                        category="product/domain",
+                        evidence_id=product_domain_key,
+                        kind="artifact_snapshot",
+                        reason_code="product_domain_contract_section_missing",
+                        reason_detail=f"{product_domain_key}.{section} must be a non-empty object.",
+                        expected_source_stage_key=product_domain_producer_stage_key,
+                        artifact_content_hash=str(product_domain_snapshot_record.content_hash or ""),
+                    )
         contract_document: dict[str, object] | None = None
         if contract_snapshot is None:
-            missing.append(f"latest {contract_key} artifact snapshot")
+            add_missing(
+                f"latest {contract_key} artifact snapshot",
+                category="product/domain",
+                evidence_id=contract_key,
+                kind="artifact_snapshot",
+                reason_code="auto_protocol_contract_snapshot_missing",
+                expected_source_stage_key=contract_producer_stage_key,
+            )
         else:
             contract_document, contract_snapshot_record = contract_snapshot
             expected_contract_stage_id = str(getattr(contract_producer, "protocol_stage_execution_id", "") or "").strip()
             snapshot_stage_id = str(contract_snapshot_record.produced_by_stage_execution_id or "").strip()
             if expected_contract_stage_id and snapshot_stage_id != expected_contract_stage_id:
-                missing.append(f"{contract_key} snapshot from expected stage {contract_producer_stage_key}")
+                add_missing(
+                    f"{contract_key} snapshot from expected stage {contract_producer_stage_key}",
+                    category="product/domain",
+                    evidence_id=contract_key,
+                    kind="artifact_snapshot",
+                    reason_code="auto_protocol_contract_wrong_stage",
+                    expected_source_stage_key=contract_producer_stage_key,
+                    actual_source_stage_execution_id=snapshot_stage_id,
+                    artifact_content_hash=str(contract_snapshot_record.content_hash or ""),
+                )
             for section in ("product_contract", "domain_contract", "system_contract", "verification_contract"):
-                if not isinstance(contract_document.get(section), Mapping):
-                    missing.append(f"{contract_key}.{section}")
+                value = contract_document.get(section)
+                if not isinstance(value, Mapping) or not value:
+                    add_missing(
+                        f"{contract_key}.{section}",
+                        category="product/domain" if section in {"product_contract", "domain_contract"} else "verification",
+                        evidence_id=contract_key,
+                        kind="artifact_snapshot",
+                        reason_code="auto_protocol_contract_section_missing",
+                        reason_detail=f"{contract_key}.{section} must be a non-empty object.",
+                        expected_source_stage_key=contract_producer_stage_key,
+                        artifact_content_hash=str(contract_snapshot_record.content_hash or ""),
+                    )
+            metadata = contract_document.get("metadata_json")
+            if not isinstance(metadata, Mapping):
+                metadata = contract_document.get("metadata")
+            if not isinstance(metadata, Mapping):
+                metadata = {}
+            product_domain_ref = metadata.get("product_domain_contract_ref")
+            if not isinstance(product_domain_ref, Mapping):
+                add_missing(
+                    f"{contract_key}.metadata_json.product_domain_contract_ref",
+                    category="product/domain",
+                    evidence_id=contract_key,
+                    kind="artifact_snapshot",
+                    reason_code="product_domain_contract_ref_missing",
+                    reason_detail="auto_protocol_contract must reference the reviewed product_domain_contract snapshot it merged.",
+                    expected_source_stage_key=contract_producer_stage_key,
+                    artifact_content_hash=str(contract_snapshot_record.content_hash or ""),
+                )
+            elif product_domain_snapshot_record is not None:
+                ref_key = str(product_domain_ref.get("artifact_key", "") or "").strip()
+                ref_hash = str(product_domain_ref.get("content_hash", "") or "").strip()
+                ref_stage = str(
+                    product_domain_ref.get("produced_by_stage_execution_id", "")
+                    or product_domain_ref.get("source_stage_execution_id", "")
+                    or ""
+                ).strip()
+                expected_hash = str(product_domain_snapshot_record.content_hash or "").strip()
+                expected_stage = str(product_domain_snapshot_record.produced_by_stage_execution_id or "").strip()
+                if ref_key != product_domain_key or ref_hash != expected_hash or ref_stage != expected_stage:
+                    add_missing(
+                        f"{contract_key} current product/domain contract reference",
+                        category="product/domain",
+                        evidence_id=contract_key,
+                        kind="artifact_snapshot",
+                        reason_code="product_domain_contract_ref_stale",
+                        reason_detail="auto_protocol_contract must reference the latest reviewed product_domain_contract snapshot by artifact key, content hash, and producing stage.",
+                        expected_source_stage_key=contract_producer_stage_key,
+                        actual_source_stage_execution_id=ref_stage,
+                        artifact_content_hash=str(contract_snapshot_record.content_hash or ""),
+                        corroboration_refs=[expected_hash, expected_stage],
+                    )
 
         events = [item for item in detail.runtime_events if item.artifact_key == primary_key]
         has_started = any(str(item.event_kind or "") == "started" for item in events)
@@ -2033,30 +2320,121 @@ class ProtocolPostgresAdapter:
         manifest_hooks = self._runtime_manifest_test_hook_ids(effective_manifest)
         missing_hooks = sorted(required_hooks - manifest_hooks)
         for hook in missing_hooks:
-            missing.append(f"octopus-runtime.json.test_hooks.{hook}")
+            add_missing(
+                f"octopus-runtime.json.test_hooks.{hook}",
+                category="UI/workflow",
+                evidence_id=f"hook:{hook}",
+                kind="browser_journey",
+                trust_tier="tier_1",
+                reason_code="runtime_manifest_hook_missing",
+                expected_source_stage_key="produce_outcome",
+            )
 
         required_items = self._required_evidence_items(contract_document or {})
         if contract_document is not None and not required_items:
-            missing.append(f"{contract_key}.verification_contract.required_evidence")
+            add_missing(
+                f"{contract_key}.verification_contract.required_evidence",
+                category="verification",
+                evidence_id="required_evidence",
+                kind="documentation_claim",
+                trust_tier="tier_2",
+                reason_code="required_evidence_missing",
+                reason_detail="verification_contract.required_evidence must contain at least one required evidence item.",
+                expected_source_stage_key=contract_producer_stage_key,
+            )
+        if contract_document is not None:
+            for decision in self._unresolved_operator_decisions(contract_document):
+                add_missing(
+                    f"operator decision unresolved: {decision}",
+                    category="operator decision",
+                    requirement_id=str(decision),
+                    evidence_id=str(decision),
+                    kind="operator_decision",
+                    trust_tier="tier_3",
+                    reason_code="operator_decision_unresolved",
+                    reason_detail=f"Required operator decision is unresolved: {decision}",
+                    expected_source_stage_key=contract_review_stage_key,
+                )
+            product_contract = contract_document.get("product_contract")
+            system_contract = contract_document.get("system_contract")
+            if not isinstance(product_contract, Mapping):
+                product_contract = {}
+            if not isinstance(system_contract, Mapping):
+                system_contract = {}
+            needs_negative_case = any(
+                isinstance(product_contract.get(key), Sequence)
+                and not isinstance(product_contract.get(key), (str, bytes))
+                and bool(product_contract.get(key))
+                for key in ("unsafe_actions",)
+            ) or any(
+                isinstance(system_contract.get(key), Sequence)
+                and not isinstance(system_contract.get(key), (str, bytes))
+                and bool(system_contract.get(key))
+                for key in ("persistence_invariants", "provider_ports", "external_callouts", "secrets_auth_boundaries")
+            )
+            has_negative_case = any(str(item.get("kind", "") or "").strip() == "negative_case" for item in required_items)
+            if needs_negative_case and not has_negative_case:
+                add_missing(
+                    f"{contract_key}.verification_contract.required_evidence.negative_case",
+                    category="verification",
+                    evidence_id="negative_case",
+                    kind="negative_case",
+                    trust_tier="tier_2",
+                    reason_code="negative_case_required",
+                    reason_detail="Serious products with unsafe actions, persistent state, provider callouts, or security boundaries must require at least one adversarial negative-case evidence item.",
+                    expected_source_stage_key=contract_producer_stage_key,
+                )
 
         producer_manifest: dict[str, object] | None = None
         reviewer_manifest: dict[str, object] | None = None
         if producer_manifest_snapshot is None:
-            missing.append(f"latest {producer_manifest_key} artifact snapshot")
+            add_missing(
+                f"latest {producer_manifest_key} artifact snapshot",
+                category="verification",
+                evidence_id=producer_manifest_key,
+                kind="artifact_snapshot",
+                reason_code="producer_manifest_snapshot_missing",
+                expected_source_stage_key="produce_outcome",
+            )
         else:
             producer_manifest, producer_manifest_record = producer_manifest_snapshot
             producer_stage_id = str(producer_manifest_record.produced_by_stage_execution_id or "").strip()
             produced_outcome_stage = self._latest_stage_execution_for_key(detail, "produce_outcome")
             expected_producer_stage_id = str(getattr(produced_outcome_stage, "protocol_stage_execution_id", "") or "").strip()
             if expected_producer_stage_id and producer_stage_id != expected_producer_stage_id:
-                missing.append(f"{producer_manifest_key} snapshot from produce_outcome")
+                add_missing(
+                    f"{producer_manifest_key} snapshot from produce_outcome",
+                    category="verification",
+                    evidence_id=producer_manifest_key,
+                    kind="artifact_snapshot",
+                    reason_code="producer_manifest_wrong_stage",
+                    expected_source_stage_key="produce_outcome",
+                    actual_source_stage_execution_id=producer_stage_id,
+                    artifact_content_hash=str(producer_manifest_record.content_hash or ""),
+                )
         if reviewer_manifest_snapshot is None:
-            missing.append(f"latest {reviewer_manifest_key} artifact snapshot")
+            add_missing(
+                f"latest {reviewer_manifest_key} artifact snapshot",
+                category="verification",
+                evidence_id=reviewer_manifest_key,
+                kind="artifact_snapshot",
+                reason_code="reviewer_manifest_snapshot_missing",
+                expected_source_stage_key="final_evidence",
+            )
         else:
             reviewer_manifest, reviewer_manifest_record = reviewer_manifest_snapshot
             reviewer_stage_id = str(reviewer_manifest_record.produced_by_stage_execution_id or "").strip()
             if current_stage_execution_id and reviewer_stage_id != current_stage_execution_id:
-                missing.append(f"{reviewer_manifest_key} snapshot from final acceptance stage")
+                add_missing(
+                    f"{reviewer_manifest_key} snapshot from final acceptance stage",
+                    category="verification",
+                    evidence_id=reviewer_manifest_key,
+                    kind="artifact_snapshot",
+                    reason_code="reviewer_manifest_wrong_stage",
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=reviewer_stage_id,
+                    artifact_content_hash=str(reviewer_manifest_record.content_hash or ""),
+                )
 
         reviewer_items = self._manifest_evidence_items(reviewer_manifest)
         reviewer_by_id: dict[str, list[dict[str, object]]] = {}
@@ -2114,7 +2492,17 @@ class ProtocolPostgresAdapter:
             completed_journey_keys.add(journey_key)
 
         for journey_key in sorted(required_journey_keys - completed_journey_keys):
-            missing.append(f"structured journey result: {journey_key}")
+            add_missing(
+                f"structured journey result: {journey_key}",
+                category="UI/workflow",
+                evidence_id=journey_key,
+                kind="browser_journey",
+                trust_tier="tier_1",
+                reason_code="journey_result_missing",
+                expected_source_stage_key="final_evidence",
+                artifact_content_hash=current_artifact_hash,
+                corroboration_refs=list(requested_journeys),
+            )
 
         def matching_reviewer_item(required: Mapping[str, object]) -> dict[str, object] | None:
             evidence_id = str(required.get("evidence_id", "") or "").strip()
@@ -2128,52 +2516,197 @@ class ProtocolPostgresAdapter:
         for required in required_items:
             evidence_id = str(required.get("evidence_id", "") or "").strip()
             kind = str(required.get("kind", "") or "").strip()
-            tier = str(required.get("trust_tier", "") or "").strip().lower()
+            requirement_id = str(required.get("requirement_id", "") or evidence_id).strip()
+            tier = self._normalize_evidence_trust_tier(
+                required.get("trust_tier", ""),
+                default=self._evidence_kind_default_tier(kind),
+            )
+            if tier == "tier_1" and kind not in self._tier_1_machine_evidence_kinds():
+                add_missing(
+                    f"machine corroboration unsupported for Tier 1 evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="tier_1_kind_not_machine_corroborated",
+                    reason_detail=f"Evidence kind {kind or '(missing kind)'} cannot satisfy Tier 1 unless Registry has a machine-corroboration source for it.",
+                    expected_source_stage_key="final_evidence",
+                    artifact_content_hash=current_artifact_hash,
+                )
+                continue
             item = matching_reviewer_item(required)
             if item is None:
-                missing.append(f"reviewer evidence: {evidence_id}")
+                add_missing(
+                    f"reviewer evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="reviewer_evidence_missing",
+                    expected_source_stage_key="final_evidence",
+                    artifact_content_hash=current_artifact_hash,
+                )
                 continue
             if not self._evidence_item_passed(item):
-                missing.append(f"passed reviewer evidence: {evidence_id}")
+                add_missing(
+                    f"passed reviewer evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="reviewer_evidence_not_passed",
+                    reason_detail=str(item.get("failure_detail", "") or item.get("observed_result", "") or f"Evidence {evidence_id} is not passed."),
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=str(item.get("source_stage_execution_id", "") or ""),
+                    artifact_content_hash=str(item.get("artifact_content_hash", "") or ""),
+                )
                 continue
             item_hash = str(item.get("artifact_content_hash", "") or "").strip()
             if current_artifact_hash and item_hash != current_artifact_hash:
-                missing.append(f"current artifact hash on evidence: {evidence_id}")
+                add_missing(
+                    f"current artifact hash on evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="evidence_wrong_artifact_hash",
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=str(item.get("source_stage_execution_id", "") or ""),
+                    artifact_content_hash=item_hash,
+                    corroboration_refs=[current_artifact_hash],
+                )
                 continue
             source_stage_id = str(item.get("source_stage_execution_id", "") or "").strip()
             if source_stage_id != current_stage_execution_id:
-                missing.append(f"reviewer-stage provenance on evidence: {evidence_id}")
+                add_missing(
+                    f"reviewer-stage provenance on evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="reviewer_evidence_wrong_stage",
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=source_stage_id,
+                    artifact_content_hash=item_hash,
+                )
                 continue
             if not str(item.get("observed_at", "") or "").strip():
-                missing.append(f"observed_at on evidence: {evidence_id}")
+                add_missing(
+                    f"observed_at on evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="evidence_observed_at_missing",
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=source_stage_id,
+                    artifact_content_hash=item_hash,
+                )
                 continue
-            item_tier = str(item.get("trust_tier", "") or "").strip().lower().replace(" ", "_").replace("-", "_")
-            if item_tier in {"1", "tier1"}:
-                item_tier = "tier_1"
-            elif item_tier in {"2", "tier2"}:
-                item_tier = "tier_2"
-            elif item_tier in {"3", "tier3"}:
-                item_tier = "tier_3"
+            item_tier = self._normalize_evidence_trust_tier(item.get("trust_tier", ""), default=self._evidence_kind_default_tier(kind))
             if item_tier != tier:
-                missing.append(f"trust tier on evidence: {evidence_id}")
+                add_missing(
+                    f"trust tier on evidence: {evidence_id}",
+                    requirement_id=requirement_id,
+                    evidence_id=evidence_id,
+                    kind=kind,
+                    trust_tier=tier,
+                    reason_code="evidence_wrong_trust_tier",
+                    reason_detail=f"Required {tier}; reviewer manifest supplied {item_tier}.",
+                    expected_source_stage_key="final_evidence",
+                    actual_source_stage_execution_id=source_stage_id,
+                    artifact_content_hash=item_hash,
+                )
                 continue
             if tier == "tier_1":
                 if kind == "runtime_start" and not has_started:
-                    missing.append("runtime start")
+                    add_missing(
+                        "runtime start",
+                        requirement_id=requirement_id,
+                        evidence_id=evidence_id,
+                        kind=kind,
+                        trust_tier=tier,
+                        reason_code="runtime_start_missing",
+                        expected_source_stage_key="final_evidence",
+                        artifact_content_hash=current_artifact_hash,
+                    )
                 elif kind == "runtime_health" and not has_healthy:
-                    missing.append("healthy runtime check")
+                    add_missing(
+                        "healthy runtime check",
+                        requirement_id=requirement_id,
+                        evidence_id=evidence_id,
+                        kind=kind,
+                        trust_tier=tier,
+                        reason_code="runtime_health_missing",
+                        expected_source_stage_key="final_evidence",
+                        artifact_content_hash=current_artifact_hash,
+                    )
                 elif kind == "browser_journey":
                     journey_key = str(item.get("journey_key", "") or required.get("journey_key", "") or "").strip()
                     if journey_key and journey_key not in completed_journey_keys:
-                        missing.append(f"machine-corroborated browser journey: {journey_key}")
+                        add_missing(
+                            f"machine-corroborated browser journey: {journey_key}",
+                            category="UI/workflow",
+                            requirement_id=requirement_id,
+                            evidence_id=evidence_id,
+                            kind=kind,
+                            trust_tier=tier,
+                            reason_code="browser_journey_not_corroborated",
+                            expected_source_stage_key="final_evidence",
+                            artifact_content_hash=current_artifact_hash,
+                        )
                 elif kind == "api_probe":
                     if not any(
                         (not current_runtime_instance_id or str(event.runtime_instance_id or "").strip() == current_runtime_instance_id)
                         and self._fetch_event_matches_probe(event, item)
                         for event in events
                     ):
-                        missing.append(f"Registry fetch event for API probe: {evidence_id}")
+                        add_missing(
+                            f"Registry fetch event for API probe: {evidence_id}",
+                            category="backend/API",
+                            requirement_id=requirement_id,
+                            evidence_id=evidence_id,
+                            kind=kind,
+                            trust_tier=tier,
+                            reason_code="api_probe_fetch_event_missing",
+                            expected_source_stage_key="final_evidence",
+                            actual_source_stage_execution_id=source_stage_id,
+                            artifact_content_hash=current_artifact_hash,
+                        )
+                elif kind == "artifact_snapshot":
+                    expected_key = str(item.get("source_artifact_key", "") or required.get("source_artifact_key", "") or "").strip()
+                    expected_hash = str(item.get("artifact_content_hash", "") or required.get("artifact_content_hash", "") or "").strip()
+                    if not any(
+                        (not expected_key or str(snapshot.artifact_key or "") == expected_key)
+                        and (not expected_hash or str(snapshot.content_hash or "") == expected_hash)
+                        for snapshot in detail.artifact_snapshots
+                    ):
+                        add_missing(
+                            f"artifact snapshot corroboration: {evidence_id}",
+                            requirement_id=requirement_id,
+                            evidence_id=evidence_id,
+                            kind=kind,
+                            trust_tier=tier,
+                            reason_code="artifact_snapshot_corroboration_missing",
+                            expected_source_stage_key="final_evidence",
+                            actual_source_stage_execution_id=source_stage_id,
+                            artifact_content_hash=expected_hash,
+                        )
         missing = list(dict.fromkeys(item for item in missing if item))
+        deduped_status: list[dict[str, object]] = []
+        seen_status: set[tuple[str, str, str, str]] = set()
+        for item in evidence_status:
+            key = (
+                str(item.get("evidence_id", "")),
+                str(item.get("kind", "")),
+                str(item.get("reason_code", "")),
+                str(item.get("reason_detail", "")),
+            )
+            if key in seen_status:
+                continue
+            seen_status.add(key)
+            deduped_status.append(item)
+        evidence_status = deduped_status
         if not missing:
             return engine
         detail_text = (
@@ -2194,6 +2727,9 @@ class ProtocolPostgresAdapter:
             "required_evidence_count": len(required_items),
             "required_journeys": sorted(required_journey_keys),
             "completed_journeys": sorted(completed_journey_keys),
+            "evidence_status": evidence_status,
+            "product_domain_contract_artifact_key": product_domain_key,
+            "product_domain_contract_review_stage_key": product_domain_review_stage_key,
         })
         return engine.model_copy(update={
             "run_status": "blocked",

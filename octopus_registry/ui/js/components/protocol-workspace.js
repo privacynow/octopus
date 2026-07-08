@@ -9531,6 +9531,56 @@ function renderProtocolRuns(container) {
         return missing.map((item) => String(item || '').trim()).filter(Boolean);
     }
 
+    function _evidenceStatusList(detail = currentRun) {
+        const metadata = _latestBlockedTransition(detail)?.metadata_json || {};
+        const items = Array.isArray(metadata?.evidence_status) ? metadata.evidence_status : [];
+        return items.filter((item) => item && typeof item === 'object');
+    }
+
+    function _evidenceMatrixEl(detail = currentRun, { limit = 12 } = {}) {
+        const items = _evidenceStatusList(detail);
+        if (!items.length) return null;
+        const shell = document.createElement('div');
+        shell.className = 'run-evidence-matrix';
+        const grouped = new Map();
+        items.forEach((item) => {
+            const category = String(item.category || 'verification').trim() || 'verification';
+            if (!grouped.has(category)) grouped.set(category, []);
+            grouped.get(category).push(item);
+        });
+        Array.from(grouped.entries()).slice(0, limit).forEach(([category, group]) => {
+            const section = document.createElement('div');
+            section.className = 'run-evidence-matrix-group';
+            const title = document.createElement('div');
+            title.className = 'run-evidence-matrix-title';
+            title.textContent = category;
+            section.appendChild(title);
+            group.slice(0, 6).forEach((item) => {
+                const row = document.createElement('div');
+                row.className = `run-evidence-matrix-row${String(item.trust_tier || '') === 'tier_3' ? ' is-advisory' : ''}`;
+                const main = document.createElement('div');
+                main.className = 'run-evidence-matrix-main';
+                const label = document.createElement('strong');
+                label.textContent = String(item.evidence_id || item.requirement_id || item.kind || 'Evidence');
+                main.appendChild(label);
+                const detailText = document.createElement('span');
+                detailText.textContent = [
+                    String(item.kind || '').replace(/_/g, ' '),
+                    String(item.reason_detail || item.reason_code || '').trim(),
+                ].filter(Boolean).join(' · ');
+                main.appendChild(detailText);
+                row.appendChild(main);
+                const tier = document.createElement('span');
+                tier.className = `badge ${String(item.trust_tier || '') === 'tier_3' ? 'badge-open' : 'badge-blocked'}`;
+                tier.textContent = String(item.trust_tier || 'tier').replace(/_/g, ' ');
+                row.appendChild(tier);
+                section.appendChild(row);
+            });
+            shell.appendChild(section);
+        });
+        return shell;
+    }
+
     function _renderRunActionBlockedResult(mutation, detail = currentRun) {
         const run = detail?.run || mutation?.run || currentRun?.run || {};
         const stage = mutation?.stage_execution || detail?.stage_executions?.[0] || null;
@@ -9556,6 +9606,7 @@ function renderProtocolRuns(container) {
 
         const code = String(run.blocked_code || stage?.failure_code || transition?.error_code || '').trim();
         const missing = _missingEvidenceList(detail);
+        const matrix = _evidenceMatrixEl(detail, { limit: 6 });
         if (code || missing.length) {
             const facts = document.createElement('div');
             facts.className = 'validation-list';
@@ -9571,6 +9622,7 @@ function renderProtocolRuns(container) {
             });
             panel.appendChild(facts);
         }
+        if (matrix) panel.appendChild(matrix);
 
         const note = document.createElement('p');
         note.className = 'quiet-note';
@@ -11933,10 +11985,12 @@ function renderProtocolRuns(container) {
             const contract = autoMeta.acceptance_contract || {};
             if (Number(contract.schema_version || 0) >= 2 || autoMeta.contract_required) {
                 const contractKey = String(contract.contract_artifact_key || 'auto_protocol_contract').trim();
+                const productDomainKey = String(contract.product_domain_contract_artifact_key || 'product_domain_contract').trim();
                 const producerManifestKey = String(contract.producer_manifest_artifact_key || 'producer_evidence_manifest').trim();
                 const reviewerManifestKey = String(contract.reviewer_manifest_artifact_key || 'reviewer_evidence_manifest').trim();
                 const findArtifact = (key) => artifactRows.find((item) => String(item.artifact_key || '').trim() === key) || null;
                 const missingEvidence = _missingEvidenceList(currentRun);
+                const evidenceMatrix = _evidenceMatrixEl(currentRun, { limit: 8 });
                 const contractBox = document.createElement('div');
                 contractBox.className = 'run-evidence-issue-list';
                 contractBox.appendChild(UI.renderListRow({
@@ -11949,6 +12003,7 @@ function renderProtocolRuns(container) {
                     badgeClass: 'badge-connected',
                 }));
                 [
+                    [productDomainKey, 'Product/domain contract'],
                     [contractKey, 'Authoritative contract'],
                     [producerManifestKey, 'Producer evidence manifest'],
                     [reviewerManifestKey, 'Reviewer evidence manifest'],
@@ -11971,6 +12026,7 @@ function renderProtocolRuns(container) {
                         badgeClass: 'badge-blocked',
                     }));
                 }
+                if (evidenceMatrix) contractBox.appendChild(evidenceMatrix);
                 section.appendChild(contractBox);
             }
             return section;

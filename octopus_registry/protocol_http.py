@@ -682,7 +682,7 @@ def build_protocol_router(
             "enabled": row.get("enabled"),
         }
 
-    def _auto_protocol_run_lessons(store: AbstractRegistryStore, run_id: str, access: ProtocolAccessContextRecord) -> list[dict[str, str]]:
+    def _auto_protocol_run_lessons(store: AbstractRegistryStore, run_id: str, access: ProtocolAccessContextRecord) -> list[dict[str, object]]:
         run_id = str(run_id or "").strip()
         if not run_id:
             return []
@@ -694,43 +694,92 @@ def build_protocol_router(
             raise _protocol_http_error(404, error_code="PROTOCOL_RUN_NOT_FOUND", message="Source protocol run was not found for lesson harvesting.") from exc
         except Exception as exc:
             raise _protocol_http_error(500, error_code="PROTOCOL_RUN_LESSONS_FAILED", message=f"Failed to harvest source run lessons: {exc}") from exc
-        lessons: list[dict[str, str]] = []
+        lessons: list[dict[str, object]] = []
 
-        def add(category: str, summary: str, source_ref: str) -> None:
+        def add(
+            category: str,
+            summary: str,
+            source_ref: str,
+            *,
+            lesson_type: str = "",
+            applies_when: str = "",
+            contract_section: str = "",
+            required_evidence: list[str] | None = None,
+            source_failure: str = "",
+        ) -> None:
             text = re.sub(r"\s+", " ", str(summary or "")).strip()
             if not text:
                 return
             key = (category, text.lower(), source_ref)
             if any((item["category"], item["summary"].lower(), item["source_ref"]) == key for item in lessons):
                 return
+            evidence = [str(item or "").strip() for item in (required_evidence or []) if str(item or "").strip()]
             lessons.append({
                 "category": category,
+                "lesson_type": lesson_type or category,
                 "summary": text[:500],
+                "applies_when": applies_when or "a future run has a similar requirement, artifact, stage, or failure mode",
+                "contract_section": contract_section or "verification_contract",
+                "requirement_id": re.sub(r"[^a-z0-9_]+", "_", f"lesson_{category}_{len(lessons) + 1}".lower()).strip("_"),
+                "required_evidence": evidence,
                 "source_ref": source_ref,
+                "source_run_id": run.protocol_run_id,
+                "source_failure": (source_failure or text)[:500],
             })
 
         run = detail.run
         if run.blocked_code:
-            add("blocked", f"Prior run blocked with {run.blocked_code}: {run.blocked_detail}", f"protocol-run:{run.protocol_run_id}")
+            add(
+                "blocked",
+                f"Prior run blocked with {run.blocked_code}: {run.blocked_detail}",
+                f"protocol-run:{run.protocol_run_id}",
+                lesson_type="negative_case",
+                applies_when="the product can block on the same acceptance or runtime evidence condition",
+                required_evidence=["negative_case", "regression_seed"],
+                source_failure=str(run.blocked_code or ""),
+            )
         for stage in detail.stage_executions:
             if stage.failure_code:
                 add(
                     "stage_failure",
                     f"Stage {stage.stage_key} failed or blocked with {stage.failure_code}: {stage.failure_detail}",
                     f"stage:{stage.protocol_stage_execution_id}",
+                    lesson_type="regression_seed",
+                    applies_when=f"a future protocol contains stage {stage.stage_key} or the same stage failure mode",
+                    required_evidence=["regression_seed"],
+                    source_failure=str(stage.failure_code or ""),
                 )
             elif stage.decision_summary:
-                add("decision", f"Stage {stage.stage_key} recorded: {stage.decision_summary}", f"stage:{stage.protocol_stage_execution_id}")
+                add(
+                    "decision",
+                    f"Stage {stage.stage_key} recorded: {stage.decision_summary}",
+                    f"stage:{stage.protocol_stage_execution_id}",
+                    lesson_type="documentation_claim",
+                    applies_when="a future contract needs to preserve reviewer decisions or operator-visible rationale",
+                    required_evidence=["documentation_claim"],
+                )
         for event in detail.runtime_events:
             kind = str(event.event_kind or "")
             if kind in {"journey_failed", "client_error", "health_checked", "runtime_error"}:
-                add("runtime", f"Runtime event {kind}: {event.summary}", f"runtime-event:{event.runtime_event_id}")
+                add(
+                    "runtime",
+                    f"Runtime event {kind}: {event.summary}",
+                    f"runtime-event:{event.runtime_event_id}",
+                    lesson_type="runtime_evidence",
+                    applies_when="a future runnable artifact has comparable runtime, health, browser, or client behavior",
+                    required_evidence=["browser_journey" if kind == "journey_failed" else "runtime_health"],
+                    source_failure=kind,
+                )
         for transition in detail.transitions:
             if transition.error_code or transition.transition_kind in {"late_result", "runtime_evidence_auto_accept", "task_cancel_requested"}:
                 add(
                     "transition",
                     f"{transition.transition_kind}: {transition.reason or transition.error_code}",
                     f"transition:{transition.protocol_transition_id}",
+                    lesson_type="state_machine",
+                    applies_when="a future protocol has comparable state transitions, retries, late results, or cancellation behavior",
+                    required_evidence=["state_machine", "negative_case"],
+                    source_failure=str(transition.error_code or transition.transition_kind or ""),
                 )
         for artifact in detail.artifacts:
             if artifact.exists is False or str(artifact.verification_state or "") in {"missing", "declared"}:
@@ -738,6 +787,10 @@ def build_protocol_router(
                     "artifact",
                     f"Artifact {artifact.artifact_key} was not proved available at {artifact.workspace_path or artifact.location}.",
                     f"artifact:{artifact.artifact_key}",
+                    lesson_type="artifact_snapshot",
+                    applies_when="a future protocol relies on the same kind of artifact output or package boundary",
+                    required_evidence=["artifact_snapshot"],
+                    source_failure="artifact_missing",
                 )
         return lessons[:20]
 

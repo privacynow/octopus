@@ -317,14 +317,17 @@ acceptance stage that can send the work back to the outcome stage.
 For serious products, the planner metadata is deliberately not the full
 contract. `metadata.auto_protocol.acceptance_contract` schema version 2 is a
 frozen skeleton: product class, `contract_required`, the
-`auto_protocol_contract` artifact key, expected contract producer/review stages,
-manifest keys, and required evidence kinds. The authoritative contract is a
-run-produced artifact snapshot created by the
-`produce_system_verification_contract` stage and reviewed by
-`review_system_verification_contract`. The acceptance gate resolves that
-snapshot by `produced_by_stage_execution_id` and rejects missing, wrong-stage,
-stale, or unreviewed contracts. This keeps the planner from self-authoring the
-entire acceptance bar and gives the run a concrete artifact trail.
+`product_domain_contract` and `auto_protocol_contract` artifact keys, expected
+contract producer/review stages, manifest keys, and required evidence kinds.
+The authoritative contract is run-produced in two reviewed artifact snapshots:
+`product_domain_contract` from `produce_product_domain_contract`, then
+`auto_protocol_contract` from `produce_system_verification_contract`. The merged
+contract must reference the product/domain snapshot by artifact key, content
+hash, and producing stage execution id. The acceptance gate resolves both
+snapshots by `produced_by_stage_execution_id` and rejects missing, wrong-stage,
+stale, malformed, unresolved, or unreviewed contracts. This keeps the planner
+from self-authoring the entire acceptance bar and gives the run a concrete
+artifact trail.
 
 The compact serious-product topology is:
 
@@ -349,10 +352,12 @@ revision path.
 
 Run improvement also carries structured `run_lessons` alongside the compacted
 run context. Lessons are harvested from blocker codes, transitions, runtime
-events, review decisions, missing artifacts, and operator feedback, then merged
-into the revised protocol metadata so the next generated draft can strengthen
-stages, hooks, acceptance contracts, and reviewer instructions without changing
-the historical run.
+events, review decisions, missing artifacts, and operator feedback as reusable
+contract clauses with lesson type, applies-when text, target contract section,
+requirement id, required evidence, source run, and source failure. The compiler
+injects those clauses into the next product/domain and system/verification
+contract-stage instructions so future revisions preserve the scar tissue as
+requirements instead of generic prompt prose.
 
 Auto Protocol surface parity is an architecture rule. Registry UI and Telegram
 must render the same session state, warnings, primary artifact contract, and
@@ -823,15 +828,19 @@ completed stages cannot be reopened by posting the action directly.
 Structured Auto Protocol acceptance is still one gate:
 `_runtime_acceptance_evidence_gate` in `protocol_store.py`. Schema v1 contracts
 use the structured journey path. Schema v2 contracts first resolve the reviewed
-`auto_protocol_contract` snapshot, the producer evidence manifest, and the
-reviewer evidence manifest. Tier 1 evidence is cross-checked against Registry
-facts such as runtime start/health events, correlated journey events, routed
-fetch events, and artifact snapshot hashes. Tier 2 evidence is accepted only
-from the expected independent reviewer or verification stage and only when it
-matches the current artifact hash. Tier 3 evidence is displayed as advisory
-domain/source/residual-risk context and cannot substitute for required Tier 1
-or Tier 2 evidence. Producer evidence can support review but does not satisfy
-reviewer-required evidence.
+`product_domain_contract` and `auto_protocol_contract` snapshots, verify the
+merged contract's product/domain snapshot reference, then resolve the producer
+and reviewer evidence manifests. The gate blocks unresolved
+`operator_decisions_required` and emits both the legacy
+`missing_runtime_evidence` strings and structured `evidence_status` rows for UI
+evidence matrices. Tier 1 evidence is cross-checked against Registry facts such
+as runtime start/health events, correlated journey events, routed fetch events,
+and artifact snapshot hashes; unsupported Tier 1 kinds block. Tier 2 evidence
+is accepted only from the expected independent reviewer or verification stage
+and only when it matches the current artifact hash. Tier 3 evidence is displayed
+as advisory domain/source/residual-risk context and cannot substitute for
+required Tier 1 or Tier 2 evidence. Producer evidence can support review but
+does not satisfy reviewer-required evidence.
 
 Rehearsal runs use `REHEARSAL_AUTHORITY_REF = "rehearsal"` and resolve stages to
 rehearsal agents/sessions. Rehearsal is dry-run execution for protocol behavior,

@@ -244,9 +244,12 @@ browser timeout.
 When the request is a serious product, Auto Protocol shows the inferred product
 class and whether a full product/system contract is required. Full contract mode
 adds early contract-production and contract-review stages before implementation.
-Those stages produce the run-specific `auto_protocol_contract`, which becomes
-the acceptance bar for product behavior, domain caveats, backend/API behavior,
-persistence, provider callouts, security boundaries, and verification evidence.
+Those stages produce and review a run-specific `product_domain_contract` and
+then a merged `auto_protocol_contract`, which becomes the acceptance bar for
+product behavior, domain caveats, backend/API behavior, persistence, provider
+callouts, security boundaries, and verification evidence. The merged contract
+must point back to the exact product/domain snapshot it used so stale or
+wrong-stage contracts cannot be accepted.
 Serious-product stages use derived multi-hour execution budgets at dispatch time
 so slow domain, backend, and evidence work does not inherit a short global bot
 timeout. Generated drafts persist `timeout_seconds: 0` unless an operator
@@ -347,10 +350,13 @@ unless that branding was requested.
 If acceptance is blocked, the dialog stays open with the missing evidence. For
 contract-bearing runs, Octopus checks structured journey results and reviewer
 evidence manifests instead of accepting prose-only claims. A missing reviewed
-contract, wrong-stage snapshot, stale artifact hash, missing API probe, failed
-DB invariant, missing provider mock, absent domain-source note, missing hook,
+product/domain contract, missing merged contract, wrong-stage snapshot, stale
+artifact hash, unresolved operator decision, missing API probe, failed DB
+invariant, missing provider mock, absent domain-source note, missing hook,
 failed journey, unhealthy runtime, or absent reviewer manifest remains visible
-until fixed, re-run, accepted by the correct path, or sent back.
+until fixed, re-run, accepted by the correct path, or sent back. Serious runs
+also show a grouped evidence matrix so you can distinguish machine proof,
+reviewer-produced evidence, and advisory source/risk notes.
 Use `Re-run journeys` from the runtime panel to queue another browser journey
 without re-running the whole stage. The request returns immediately, and the run
 updates when the bot posts the correlated result.

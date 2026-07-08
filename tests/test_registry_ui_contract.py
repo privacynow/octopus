@@ -983,6 +983,35 @@ def test_dashboard_avoids_duplicate_subjects_between_summary_and_board_sections(
     assert "value: String(summary.agents?.connected || 0)" not in dashboard
 
 
+def test_catalog_cards_clamp_long_summary_text() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    css = (repo_root / "octopus_registry" / "ui" / "css" / "main.css").read_text(encoding="utf-8")
+
+    item_rule = css.split(".kit-catalog-item {", 1)[1].split("}", 1)[0]
+    card_rule = css.split(".kit-catalog-card {", 1)[1].split("}", 1)[0]
+    title_rule = css.split(".kit-catalog-card-title {", 1)[1].split("}", 1)[0]
+    slug_rule = css.split(".kit-catalog-card-slug {", 1)[1].split("}", 1)[0]
+    body_rule = css.split(".kit-catalog-card-body {", 1)[1].split("}", 1)[0]
+
+    assert "min-width: 0;" in item_rule
+    assert "overflow: hidden;" in item_rule
+    assert "min-width: 0;" in card_rule
+    assert "overflow: hidden;" in card_rule
+    assert "height: auto;" in card_rule
+    assert "max-height: 16rem;" in card_rule
+    assert "align-self: start;" in card_rule
+    assert "-webkit-line-clamp: 2;" in title_rule
+    assert "max-height: calc(1.35em * 2);" in title_rule
+    assert "overflow-wrap: anywhere;" in title_rule
+    assert "overflow: hidden;" in title_rule
+    assert "text-overflow: ellipsis;" in slug_rule
+    assert "white-space: nowrap;" in slug_rule
+    assert "-webkit-line-clamp: 4;" in body_rule
+    assert "max-height: calc(1.55em * 4);" in body_rule
+    assert "overflow-wrap: anywhere;" in body_rule
+    assert "overflow: hidden;" in body_rule
+
+
 def test_usage_views_surface_cached_and_uncached_token_breakdowns() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     usage_view = (

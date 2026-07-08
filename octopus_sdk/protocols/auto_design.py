@@ -142,12 +142,21 @@ _AUTO_SERIOUS_PRODUCT_CLASSES = {
 _AUTO_V2_REQUIRED_EVIDENCE_KINDS = (
     "runtime_start",
     "runtime_health",
+    "artifact_snapshot",
     "browser_journey",
     "api_probe",
+    "api_contract",
+    "domain_invariant",
     "db_invariant",
+    "persistence_invariant",
     "provider_mock",
+    "provider_live_status",
     "state_machine",
     "security_gate",
+    "negative_case",
+    "regression_seed",
+    "documentation_claim",
+    "operator_decision",
     "domain_source",
 )
 
@@ -739,6 +748,13 @@ class ProtocolRunLessonRecord(RegistryRecordModel):
     category: str = ""
     summary: str = ""
     source_ref: str = ""
+    lesson_type: str = ""
+    applies_when: str = ""
+    contract_section: str = ""
+    requirement_id: str = ""
+    required_evidence: list[str] = Field(default_factory=list)
+    source_run_id: str = ""
+    source_failure: str = ""
 
 
 class ProtocolAutoDesignRequestRecord(RegistryRecordModel):
@@ -1729,7 +1745,7 @@ def _contract_stage_packages(
         (
             f"Create product_domain_contract as structured JSON for: {requirement} "
             "It must include product_contract and domain_contract sections. product_contract must cover users, workflows, success criteria, unsafe actions, visible outcomes, and non_goals. "
-            "domain_contract must cover domain terms, expert assumptions, required sources, caveats, operator_decisions_required, and do_not_claim boundaries. "
+            "domain_contract must cover domain terms, expert assumptions, required sources, caveats, operator_decisions_required, do_not_claim boundaries, invariants, unsafe actions, external data/provider assumptions, persistence/state rules, adversarial negative cases, and inherited lessons. "
             f"Preserve requirement terms: {terms_text}. Product class: {product_class}."
         ),
         (
@@ -1761,8 +1777,9 @@ def _contract_stage_packages(
         ),
         (
             "Create auto_protocol_contract as structured JSON. It must include product_contract and domain_contract from the accepted upstream artifact, plus system_contract and verification_contract. "
+            "metadata_json.product_domain_contract_ref must name the upstream product_domain_contract artifact key, content_hash, and produced_by_stage_execution_id used to create this merged contract. "
             "system_contract must cover APIs, state transitions, persistence invariants, provider ports/adapters, external callouts, secrets/auth boundaries, failure behavior, and docs/readme expectations when relevant. "
-            "verification_contract must list required_evidence items with evidence_id, kind, trust_tier, requirement_id, required status, and expected corroboration. "
+            "verification_contract must list required_evidence items with evidence_id, kind, trust_tier, requirement_id, required status, and expected corroboration. Use browser_journey as the canonical browser proof kind. For serious products with unsafe actions, persistent state, provider callouts, or security boundaries, include at least one negative_case evidence item. "
             "Require backend/API/data correctness evidence for serious products even when the UI looks polished. "
             f"Preserve requirement terms: {terms_text}."
         ),
@@ -2763,6 +2780,32 @@ def compile_auto_protocol_plan(
     run_lessons: list[ProtocolRunLessonRecord] | None = None,
 ) -> dict[str, object]:
     role_by_key = {role.role_key: role for role in plan.roles}
+    lessons_payload = [item.model_dump(mode="json") for item in run_lessons or []]
+    lesson_lines: list[str] = []
+    for lesson in lessons_payload[:12]:
+        if not isinstance(lesson, Mapping):
+            continue
+        summary = _sentence(lesson.get("summary")) or _sentence(lesson.get("source_failure"))
+        if not summary:
+            continue
+        lesson_type = _snake(str(lesson.get("lesson_type") or lesson.get("category") or "lesson"))
+        applies_when = _sentence(lesson.get("applies_when")) or "when relevant to the requested product"
+        section = _snake(str(lesson.get("contract_section") or "verification_contract"))
+        required_evidence = lesson.get("required_evidence")
+        evidence_text = ""
+        if isinstance(required_evidence, Sequence) and not isinstance(required_evidence, (str, bytes)):
+            evidence_text = ", ".join(str(item or "").strip() for item in required_evidence if str(item or "").strip())
+        lesson_lines.append(
+            f"- {lesson_type}: {summary} Applies when: {applies_when}. Contract section: {section}."
+            + (f" Required evidence: {evidence_text}." if evidence_text else "")
+        )
+    lesson_instruction = ""
+    if lesson_lines:
+        lesson_instruction = (
+            "Inherited run lessons must become contract clauses, not generic prose. "
+            "Merge these lessons into product/domain/system/verification requirements where they apply:\n"
+            + "\n".join(lesson_lines)
+        )
     stages: list[dict[str, object]] = []
     for index, stage in enumerate(plan.stages):
         transitions: dict[str, str] = {}
@@ -2797,6 +2840,7 @@ def compile_auto_protocol_plan(
             stage.purpose.strip(),
             "",
             "Use the protocol run context, declared inputs, and artifact contract. Produce or update declared outputs only where this stage owns them.",
+            lesson_instruction if stage.stage_key in {"produce_product_domain_contract", "produce_system_verification_contract"} else "",
             "Do not leave foreground servers, watchers, or other long-running commands active. If a temporary local server is needed, stop it before final response.",
             decision_instruction,
         ]).strip()
@@ -2836,7 +2880,6 @@ def compile_auto_protocol_plan(
         },
         "run_inputs": plan.run_profile.run_inputs,
     }
-    lessons_payload = [item.model_dump(mode="json") for item in run_lessons or []]
     if lessons_payload:
         auto_protocol = metadata["auto_protocol"]
         if isinstance(auto_protocol, dict):
@@ -2853,6 +2896,8 @@ def compile_auto_protocol_plan(
             "contract_producer_stage_key": "produce_system_verification_contract",
             "contract_review_stage_key": "review_system_verification_contract",
             "product_domain_contract_artifact_key": _AUTO_PRODUCT_DOMAIN_CONTRACT_ARTIFACT_KEY,
+            "product_domain_contract_producer_stage_key": "produce_product_domain_contract",
+            "product_domain_contract_review_stage_key": "review_product_domain_contract",
             "producer_manifest_artifact_key": "producer_evidence_manifest",
             "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
             "required_evidence_kinds": list(_AUTO_V2_REQUIRED_EVIDENCE_KINDS),

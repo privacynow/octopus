@@ -899,6 +899,8 @@ class ProtocolAcceptanceContractV2SkeletonRecord(RegistryRecordModel):
     contract_producer_stage_key: str = "produce_system_verification_contract"
     contract_review_stage_key: str = "review_system_verification_contract"
     product_domain_contract_artifact_key: str = "product_domain_contract"
+    product_domain_contract_producer_stage_key: str = "produce_product_domain_contract"
+    product_domain_contract_review_stage_key: str = "review_product_domain_contract"
     producer_manifest_artifact_key: str = "producer_evidence_manifest"
     reviewer_manifest_artifact_key: str = "reviewer_evidence_manifest"
     required_evidence_kinds: list[str] = Field(default_factory=list)

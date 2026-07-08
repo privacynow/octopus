@@ -128,6 +128,19 @@ def _launchable_definition(**overrides) -> ProtocolDefinitionRecord:
     return ProtocolDefinitionRecord.model_validate(base)
 
 
+def _latest_transition_metadata(detail, transition_kind: str) -> dict[str, object]:
+    kind = str(transition_kind or "").strip().lower()
+    for item in detail.transitions:
+        if str(item.transition_kind or "").strip().lower() != kind:
+            continue
+        metadata = item.metadata_json
+        if isinstance(metadata, RegistryJsonRecord):
+            return metadata.as_dict()
+        if isinstance(metadata, dict):
+            return dict(metadata)
+    return {}
+
+
 def test_runtime_manifest_run_ready_policy_is_generic() -> None:
     assert runtime_manifest_run_ready_blockers(None) == []
     assert runtime_manifest_run_ready_blockers(
@@ -3138,7 +3151,25 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
     release_file = tmp_path / "release.md"
     producer_manifest_file = tmp_path / "producer_manifest.json"
     reviewer_manifest_file = tmp_path / "reviewer_manifest.json"
-    product_domain_file.write_text(json.dumps({"product_contract": {}, "domain_contract": {}}), encoding="utf-8")
+    product_domain_document = {
+        "product_contract": {
+            "users": ["operator"],
+            "workflows": ["research a symbol and see a visible result"],
+            "success_criteria": ["the UI and API both update for a new symbol"],
+            "unsafe_actions": ["placing live orders"],
+            "visible_outcomes": ["primary result is visible"],
+            "non_goals": ["profit promises"],
+        },
+        "domain_contract": {
+            "domain_terms": ["quote"],
+            "expert_assumptions": ["market data may be delayed"],
+            "required_sources": ["fixture provider"],
+            "caveats": ["educational only"],
+            "operator_decisions_required": [],
+            "do_not_claim": ["guaranteed profit"],
+        },
+    }
+    product_domain_file.write_text(json.dumps(product_domain_document), encoding="utf-8")
     product_domain_review_file.write_text("Product/domain contract accepted.\n", encoding="utf-8")
     contract_review_file.write_text("System/verification contract accepted.\n", encoding="utf-8")
     release_file.write_text("Release evidence.\n", encoding="utf-8")
@@ -3192,11 +3223,11 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
                     "journey_key": "primary_happy_path",
                 },
                 {"evidence_id": "no_failed_mutation", "kind": "db_invariant", "trust_tier": "tier_2"},
+                {"evidence_id": "unsafe_trade_rejected", "kind": "negative_case", "trust_tier": "tier_2"},
                 {"evidence_id": "domain_sources", "kind": "domain_source", "trust_tier": "tier_3"},
             ],
         },
     }
-    contract_file.write_text(json.dumps(contract_document), encoding="utf-8")
 
     def document(slug: str) -> dict[str, object]:
         return {
@@ -3217,6 +3248,9 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
                         "contract_artifact_key": "auto_protocol_contract",
                         "contract_producer_stage_key": "produce_system_verification_contract",
                         "contract_review_stage_key": "review_system_verification_contract",
+                        "product_domain_contract_artifact_key": "product_domain_contract",
+                        "product_domain_contract_producer_stage_key": "produce_product_domain_contract",
+                        "product_domain_contract_review_stage_key": "review_product_domain_contract",
                         "producer_manifest_artifact_key": "producer_evidence_manifest",
                         "reviewer_manifest_artifact_key": "reviewer_evidence_manifest",
                     },
@@ -3355,7 +3389,19 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
         ]
         return stage
 
-    def run_to_final(slug: str, *, contract_snapshot_stage: str = "correct", include_api_fetch: bool = True, reviewer_source: str = "final"):
+    def run_to_final(
+        slug: str,
+        *,
+        contract_snapshot_stage: str = "correct",
+        product_domain_snapshot_stage: str = "correct",
+        include_api_fetch: bool = True,
+        reviewer_source: str = "final",
+        stale_product_domain_ref: bool = False,
+        unresolved_operator_decision: bool = False,
+        unsupported_tier1_kind: bool = False,
+        tier3_substitution: bool = False,
+        malformed_product_domain: bool = False,
+    ):
         enroll = store.enroll(agent_card(bot_key=f"m-{uuid.uuid4().hex[:8]}"))
         published = published_protocol(store, slug=slug, document=document(slug))
         created = store.create_protocol_run(
@@ -3382,6 +3428,10 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
             conn.commit()
 
         product_stage = next(item for item in detail.stage_executions if item.stage_key == "produce_product_domain_contract")
+        product_domain_file.write_text(
+            json.dumps({"product_contract": {}, "domain_contract": {}} if malformed_product_domain else product_domain_document),
+            encoding="utf-8",
+        )
         update_stage(
             enroll,
             product_stage,
@@ -3400,6 +3450,11 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
             ],
         )
         detail = store.get_protocol_run(run_id, access=operator_access())
+        product_domain_snapshot_stage_id = product_stage.protocol_stage_execution_id
+        if product_domain_snapshot_stage == "wrong":
+            product_domain_snapshot_stage_id = next(item for item in detail.stage_executions if item.stage_key == "review_product_domain_contract").protocol_stage_execution_id
+        if product_domain_snapshot_stage != "missing":
+            save_snapshot(run_id, detail, "product_domain_contract", product_domain_file, "product-domain-hash", product_domain_snapshot_stage_id)
         product_review = running_stage(detail, "review_product_domain_contract")
         update_stage(
             enroll,
@@ -3421,6 +3476,25 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
         )
         detail = store.get_protocol_run(run_id, access=operator_access())
         contract_stage = running_stage(detail, "produce_system_verification_contract")
+        local_contract_document = json.loads(json.dumps(contract_document))
+        local_contract_document["metadata_json"] = {
+            "product_domain_contract_ref": {
+                "artifact_key": "product_domain_contract",
+                "content_hash": "stale-product-domain-hash" if stale_product_domain_ref else "product-domain-hash",
+                "produced_by_stage_execution_id": "stale-stage" if stale_product_domain_ref else product_stage.protocol_stage_execution_id,
+            }
+        }
+        if unresolved_operator_decision:
+            local_contract_document["operator_decisions_required"] = [
+                {"decision_id": "choose_provider", "question": "Which provider should own the data?", "required": True}
+            ]
+        if unsupported_tier1_kind:
+            local_contract_document["verification_contract"]["required_evidence"].append({
+                "evidence_id": "db_claimed_machine_proof",
+                "kind": "db_invariant",
+                "trust_tier": "tier_1",
+            })
+        contract_file.write_text(json.dumps(local_contract_document), encoding="utf-8")
         update_stage(
             enroll,
             contract_stage,
@@ -3609,8 +3683,11 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
             ("quote_api_probe", "api_probe", "tier_1"),
             ("primary_happy_path", "browser_journey", "tier_1"),
             ("no_failed_mutation", "db_invariant", "tier_2"),
+            ("unsafe_trade_rejected", "negative_case", "tier_2"),
             ("domain_sources", "domain_source", "tier_3"),
         ):
+            if tier3_substitution and evidence_id == "no_failed_mutation":
+                tier = "tier_3"
             item = {
                 "evidence_id": evidence_id,
                 "kind": kind,
@@ -3670,13 +3747,46 @@ def test_registry_store_v2_contract_gate_requires_reviewed_contract_and_corrobor
     assert wrong_contract.run.status == "blocked"
     assert "auto_protocol_contract snapshot from expected stage" in wrong_contract.run.blocked_detail
 
+    missing_product_domain = run_to_final("v2-product-domain-missing", product_domain_snapshot_stage="missing")
+    assert missing_product_domain.run.status == "blocked"
+    assert "latest product_domain_contract artifact snapshot" in missing_product_domain.run.blocked_detail
+
+    wrong_product_domain = run_to_final("v2-product-domain-wrong-stage", product_domain_snapshot_stage="wrong")
+    assert wrong_product_domain.run.status == "blocked"
+    assert "product_domain_contract snapshot from expected stage" in wrong_product_domain.run.blocked_detail
+
+    malformed_product_domain = run_to_final("v2-product-domain-malformed", malformed_product_domain=True)
+    assert malformed_product_domain.run.status == "blocked"
+    assert "product_domain_contract.product_contract" in malformed_product_domain.run.blocked_detail
+
+    stale_product_domain_ref = run_to_final("v2-contract-stale-product-domain-ref", stale_product_domain_ref=True)
+    assert stale_product_domain_ref.run.status == "blocked"
+    assert "auto_protocol_contract current product/domain contract reference" in stale_product_domain_ref.run.blocked_detail
+
+    unresolved_decision = run_to_final("v2-contract-unresolved-decision", unresolved_operator_decision=True)
+    assert unresolved_decision.run.status == "blocked"
+    assert "operator decision unresolved: choose_provider" in unresolved_decision.run.blocked_detail
+
     producer_only = run_to_final("v2-contract-producer-evidence", reviewer_source="producer")
     assert producer_only.run.status == "blocked"
     assert "reviewer-stage provenance on evidence: runtime_started" in producer_only.run.blocked_detail
 
+    unsupported_tier1 = run_to_final("v2-contract-unsupported-tier1-kind", unsupported_tier1_kind=True)
+    assert unsupported_tier1.run.status == "blocked"
+    assert "machine corroboration unsupported for Tier 1 evidence: db_claimed_machine_proof" in unsupported_tier1.run.blocked_detail
+
+    tier3_substitution = run_to_final("v2-contract-tier3-substitution", tier3_substitution=True)
+    assert tier3_substitution.run.status == "blocked"
+    assert "trust tier on evidence: no_failed_mutation" in tier3_substitution.run.blocked_detail
+
     missing_fetch = run_to_final("v2-contract-missing-fetch", include_api_fetch=False)
     assert missing_fetch.run.status == "blocked"
     assert "Registry fetch event for API probe: quote_api_probe" in missing_fetch.run.blocked_detail
+    metadata = _latest_transition_metadata(missing_fetch, "blocked")
+    assert any(
+        item.get("reason_code") == "api_probe_fetch_event_missing"
+        for item in metadata.get("evidence_status", [])
+    )
 
     accepted = run_to_final("v2-contract-accepted")
     assert accepted.run.status == "completed", accepted.run.blocked_detail
@@ -5180,7 +5290,7 @@ def test_auto_protocol_planner_task_timeout_fails_session_during_maintenance(pos
         event_kind="planning_started",
     )
 
-    maintenance = store.run_protocol_maintenance(now="2026-07-08T00:00:03+00:00")
+    maintenance = store.run_protocol_maintenance(now="2036-07-08T00:00:03+00:00")
 
     assert "auto-timeout-session" in maintenance.affected_auto_session_ids
     failed = store.get_protocol_auto_design_session("auto-timeout-session", access=operator_access())
@@ -5200,8 +5310,15 @@ def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) 
                 "run_lessons": [
                     {
                         "category": "journey_failure",
+                        "lesson_type": "browser_journey",
                         "summary": "The prior run missed a visible result assertion.",
+                        "applies_when": "the product has a user-visible workflow",
+                        "contract_section": "verification_contract",
+                        "requirement_id": "visible_result_assertion",
+                        "required_evidence": ["browser_journey", "negative_case"],
                         "source_ref": "runtime-event:abc",
+                        "source_run_id": "run-prior",
+                        "source_failure": "journey_failed",
                     }
                 ],
             }
@@ -5214,6 +5331,10 @@ def test_auto_protocol_run_lessons_round_trip(postgres_registry_truncated: str) 
 
     fetched = store.get_protocol_auto_design_session(session.session_id, access=operator_access())
     assert fetched.run_lessons[0].category == "journey_failure"
+    assert fetched.run_lessons[0].lesson_type == "browser_journey"
+    assert fetched.run_lessons[0].applies_when == "the product has a user-visible workflow"
+    assert fetched.run_lessons[0].required_evidence == ["browser_journey", "negative_case"]
+    assert fetched.run_lessons[0].source_run_id == "run-prior"
     assert fetched.draft_definition_json.as_dict()["metadata"]["auto_protocol"]["run_lessons"][0]["summary"] == (
         "The prior run missed a visible result assertion."
     )

@@ -347,13 +347,17 @@ operator `Re-run journey` control queues bot work and returns immediately; use
 the run updates/runtime event list to confirm the later pass or failure.
 
 For v2 Auto Protocol contracts, also verify that the latest
-`auto_protocol_contract` snapshot was produced by
-`produce_system_verification_contract` and reviewed by
-`review_system_verification_contract`. The final `reviewer_evidence_manifest`
-must be produced by `final_evidence`, match the current primary artifact hash,
-and include required Tier 1, Tier 2, and Tier 3 items. API probes should have
-matching Registry fetch events; DB invariants, provider mocks, state-machine
-checks, and security checks should come from the expected reviewer stage rather
+`product_domain_contract` snapshot was produced by
+`produce_product_domain_contract` and reviewed by
+`review_product_domain_contract`, and that the latest `auto_protocol_contract`
+snapshot was produced by `produce_system_verification_contract`, reviewed by
+`review_system_verification_contract`, and references that product/domain
+snapshot by artifact key, content hash, and producing stage execution id. The
+final `reviewer_evidence_manifest` must be produced by `final_evidence`, match
+the current primary artifact hash, and include required Tier 1, Tier 2, and Tier
+3 items. API probes should have matching Registry fetch events; DB invariants,
+provider mocks, state-machine checks, and security checks should come from the
+expected reviewer stage rather
 than the producer. Domain-source notes are advisory and should not be treated as
 proof that runtime/API behavior works.
 

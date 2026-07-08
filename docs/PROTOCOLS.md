@@ -138,12 +138,16 @@ the authoritative acceptance contract. The planner stores only a v2 skeleton in
 `metadata.auto_protocol.acceptance_contract`: product class, whether a full
 contract is required, the `auto_protocol_contract` artifact key, and the
 minimum evidence kinds. Early run stages then produce and review the real
-run-specific contract as artifacts: product/domain first, then system and
-verification. The gate reads the latest reviewed `auto_protocol_contract`
-snapshot, not the planner's prose, before final acceptance. This is required for
-runnable apps, APIs, dashboards, workflow engines, persistent-state systems,
-external-provider integrations, finance/trading, payments, secrets, live
-actions, recommendations, backtesting, or other high-risk product classes.
+run-specific contract as artifacts: `product_domain_contract` first, then the
+merged `auto_protocol_contract` for product, domain, system, and verification.
+The merged contract must reference the exact product/domain snapshot it used by
+artifact key, content hash, and producing stage execution id. The gate reads
+those reviewed snapshots, not the planner's prose, before final acceptance and
+blocks stale, missing, wrong-stage, malformed, or unreviewed contracts. This is
+required for runnable apps, APIs, dashboards, workflow engines,
+persistent-state systems, external-provider integrations, finance/trading,
+payments, secrets, live actions, recommendations, backtesting, or other
+high-risk product classes.
 
 Generated workflows are budgeted. The normal compiler keeps the primary outcome
 stage immediately before final acceptance and rejects plans above the hard stage
@@ -374,8 +378,13 @@ example of that broader policy.
 
 When a protocol version includes
 `metadata.auto_protocol.acceptance_contract`, final acceptance uses structured
-runtime evidence instead of prose-only claims. The contract names required
-journeys in terms of stable hook ids. The artifact must expose those hooks in
+evidence instead of prose-only claims. For v2 serious products, the metadata is
+only a skeleton. The gate first resolves the reviewed `product_domain_contract`
+and `auto_protocol_contract` snapshots, checks that the merged contract points
+at the current product/domain snapshot, and blocks unresolved
+`operator_decisions_required` before applying evidence. The contract names
+required journeys in terms of stable hook ids. The artifact must expose those
+hooks in
 `octopus-runtime.json.test_hooks`, typically as `data-testid` locators. Missing
 or unmapped hooks are artifact contract failures. The bot-side journey runner
 executes only Registry-routed artifact URLs, sends its scoped runtime token only
@@ -394,15 +403,24 @@ from the latest retained snapshot when the acceptance gate evaluates a
 contract-bearing run. For v2 contracts, each evidence item also carries a trust
 tier, source stage, observed time, current artifact content hash, runtime
 instance when applicable, observed result, and corroboration references. Tier 1
-evidence is machine-corroborated by Registry state: runtime start/health,
-journey results tied to a Registry-issued `journey_run_id`, API probes matched
-against server-generated fetch events, and retained snapshot hashes. Tier 2 is
-independent reviewer attestation such as unit/integration tests, DB invariants,
-provider mocks, state-machine checks, and security checks; it must be produced
-by the expected reviewer or verification stage and match the current artifact
+evidence is limited to machine-corroborated Registry state: runtime
+start/health, journey results tied to a Registry-issued `journey_run_id`, API
+probes matched against server-generated fetch events, and retained snapshot
+hashes. Unsupported Tier 1 kinds are blockers instead of accepted claims. Tier 2
+is independent reviewer attestation such as unit/integration tests, domain
+invariants, DB or persistence checks, provider mocks, state-machine checks,
+security checks, negative cases, and regression seeds; it must be produced by
+the expected reviewer or verification stage and match the current artifact
 hash. Tier 3 is advisory evidence such as domain sources, live-provider notes,
 and residual-risk explanations. Advisory evidence can be required for
 visibility, but it cannot satisfy machine-proof requirements.
+
+When the gate blocks a v2 run, the transition metadata keeps the legacy
+`missing_runtime_evidence` list and also records structured `evidence_status`
+rows. The UI renders those rows as an evidence matrix grouped by
+product/domain, backend/API, state, provider/data, security, UI/workflow, docs,
+and operator decisions so operators can see which proof is missing, stale,
+wrong-stage, wrong-hash, uncorroborated, or advisory-only.
 
 The v2 gate covers more than browser journeys. The reviewed
 `auto_protocol_contract` must describe product workflows, unsafe actions,
@@ -410,7 +428,9 @@ domain assumptions and source boundaries, API surface, persistence/state
 invariants, provider ports and callouts, secrets/auth boundaries, failure
 behavior, positive and negative tests, backend/API probes, DB/state checks,
 provider mock or live-status checks, browser journeys, and documentation checks
-when the product needs them. A reviewer manifest that only says "looks good" or
+when the product needs them. Serious contracts with unsafe actions, persistent
+state, provider callouts, or security boundaries must require adversarial
+negative-case evidence. A reviewer manifest that only says "looks good" or
 contains uncorroborated JSON is not enough.
 
 ## Starting A Run

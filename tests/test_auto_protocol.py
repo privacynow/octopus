@@ -14,7 +14,11 @@ from octopus_sdk.protocols import (
     render_protocol_stage_prompt,
     revise_auto_protocol_session,
 )
-from octopus_sdk.protocols.auto_design import _validate_and_repair_protocol_document, auto_protocol_event_summary
+from octopus_sdk.protocols.auto_design import (
+    ProtocolRunLessonRecord,
+    _validate_and_repair_protocol_document,
+    auto_protocol_event_summary,
+)
 from octopus_sdk.protocols.models import ProtocolRunMutationRecord
 
 
@@ -45,6 +49,38 @@ def _planner_response(*package_keys: str) -> ProtocolAutoDesignModelResponseReco
         ],
         acceptance_criteria=["The primary artifact is produced, inspectable, reviewed, and supported by release evidence."],
     )
+
+
+def test_auto_protocol_injects_run_lessons_as_contract_stage_clauses():
+    session = generate_auto_protocol_session(
+        ProtocolAutoDesignRequestRecord(
+            surface="registry",
+            requirement_text="Build a browser-runnable API service with persistent state and a simple operator dashboard.",
+            model_response=_planner_response("domain_grounding", "api_design", "implementation"),
+            run_lessons=[
+                ProtocolRunLessonRecord(
+                    category="blocked",
+                    lesson_type="negative_case",
+                    summary="Rejected actions must not mutate user-owned state.",
+                    applies_when="the product has persistent user-owned state",
+                    contract_section="verification_contract",
+                    required_evidence=["negative_case", "persistence_invariant"],
+                    source_run_id="run-prior",
+                    source_failure="runtime_evidence_required",
+                )
+            ],
+        )
+    )
+    document = session.draft_definition_json.as_dict()
+    product_domain = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_product_domain_contract")
+    system_verification = next(stage for stage in document["stages"] if stage["stage_key"] == "produce_system_verification_contract")
+
+    for stage in (product_domain, system_verification):
+        instructions = stage["instructions"]
+        assert "Inherited run lessons must become contract clauses" in instructions
+        assert "Rejected actions must not mutate user-owned state." in instructions
+        assert "Required evidence: negative_case, persistence_invariant." in instructions
+        assert "Contract section: verification_contract." in instructions
 
 
 def test_auto_protocol_generates_requirement_specific_protocol_without_template_classifier():
